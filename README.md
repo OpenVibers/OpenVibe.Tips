@@ -41,7 +41,7 @@ from *interaction delivered*.
   (openvibe-sdk transactional outbox)
 - **OpenVibe.Network** — SSO for people, service tokens, JWKS, identity resolve (importer)
 - **OpenVibe.Live** — chat delivery through `/internal/tips/deliveries` (deployed in Live since `f11f809`; [docs/live-patch.diff](docs/live-patch.diff) is the original patch) until OpenVibe.Chat exposes paid messages; overlay consumer
-- **OpenVibe.Shared** v1.5.0 (app icon, SSR footer, noscript nav, release manifest, legal pages) and
+- **OpenVibe.Shared** v1.5.1 (app icon, SSR footer, noscript nav, release manifest, legal pages) and
   the Network's `navbar.js`
 
 ## Run it
@@ -137,7 +137,7 @@ The capabilities and the service manifest were released in openvibe-contracts v0
 the charter's `tips.simulate` is `tips.simulation.run`; `tips.interaction.record` is new, for EXTERNAL
 tips); the drafts stay in [docs/capabilities-proposal/](docs/capabilities-proposal/) and
 [docs/service-manifest-proposal.json](docs/service-manifest-proposal.json). Grants are matched with
-contracts' `capabilities.grants()` (exact id or a `.*` family). Tips pins openvibe-contracts v0.32.0,
+contracts' `capabilities.grants()` (exact id or a `.*` family). Tips pins openvibe-contracts v0.33.0,
 which also carries the payload schemas of the six `tips.*` events below (v0.30.2) and of
 `tips.interaction.moderated|erased` (v0.32.0); `test/contracts.test.js` validates every envelope and
 payload Tips produces against them.
@@ -337,7 +337,7 @@ exist here (plan §12.12):
 4. real persistence and end-to-end workflows — ✔ against stubs; not yet against the real Billing and
    Events (Billing is in shadow and has sent no events; the production database is empty; the Live
    import has not been run);
-5. capability and event registration against OpenVibe.Contracts — ✔ v0.15.0, payload schemas in v0.30.2 and v0.32.0 (pinned);
+5. capability and event registration against OpenVibe.Contracts — ✔ v0.15.0, payload schemas in v0.30.2 and v0.32.0 (v0.33.0 pinned);
 6. a migration/seed strategy ✔, a written threat review ✔ ([docs/threat-review.md](docs/threat-review.md),
    internal; an independent review is still due), and sitemap/robots ✔ (no feed);
 7. acceptance tests proving the advertised functionality — ✔ (table above).
