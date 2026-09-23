@@ -234,13 +234,15 @@ const { boot, check, done } = require('./helpers/app');
         assert.strictEqual(totals.external, 500);
     });
 
-    await check('the Billing webhook: bad signatures refused, proxied requests hidden, other sources ignored', async () => {
+    await check('the Billing webhook: bad, v1-only and stale signatures refused, proxied requests hidden, other sources ignored', async () => {
         const ev = billing.foreignDonation({ from: null, to: alex.subject, amount: 5 });
         const bad = await t.deliver(ev, { secret: 'x'.repeat(48) });
         assert.strictEqual(bad.status, 401);
+        assert.strictEqual((await t.deliver(ev, { v1Only: true })).status, 401, 'v1 only (no v2 header): refused');
+        assert.strictEqual((await t.deliver(ev, { now: Date.now() - 301000 })).status, 401, 'stale v2 (outside the 300 s window): refused');
         const raw = JSON.stringify({ event: ev, seq: 1 });
-        const { signDelivery } = require('openvibe-sdk/events');
-        const proxied = await fetch(`${t.base}/internal/events`, { method: 'POST', body: raw, headers: { 'Content-Type': 'application/json', 'X-OpenVibe-Signature': signDelivery(raw, 'e'.repeat(48)), 'X-Forwarded-For': '203.0.113.9' } });
+        const { signDeliveryHeaders } = require('openvibe-sdk/events');
+        const proxied = await fetch(`${t.base}/internal/events`, { method: 'POST', body: raw, headers: { 'Content-Type': 'application/json', ...signDeliveryHeaders(raw, 'e'.repeat(48)), 'X-Forwarded-For': '203.0.113.9' } });
         assert.strictEqual(proxied.status, 404);
         const forged = await t.deliver({ ...ev, source: 'live' });
         assert.strictEqual(forged.json.outcome, 'ignored:source');

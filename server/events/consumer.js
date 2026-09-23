@@ -48,7 +48,8 @@ function consumerRouter({ domain, config, log = console }) {
         if (!secrets.length) return http.sendProblem(res, 503, 'tips.webhook_disabled', { detail: 'TIPS_EVENTS_SECRET is not set', ctx: req.ov });
         const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
         let delivery = null;
-        for (const s of secrets) { delivery = parseDelivery(raw, req.headers, s); if (delivery) break; }
+        // Signature v2 only: HMAC over "<t>.<raw body>" with t within ±300 s; a v1-only (v2 stripped) or stale delivery is refused.
+        for (const s of secrets) { delivery = parseDelivery(raw, req.headers, s, { requireV2: true }); if (delivery) break; }
         if (!delivery) return http.sendProblem(res, 401, 'tips.bad_signature', { detail: 'X-OpenVibe-Signature does not verify', ctx: req.ov });
         const event = delivery.event;
         if (!event || typeof event.event_id !== 'string' || !/^evt_[0-9A-HJKMNP-TV-Z]{26}$/.test(event.event_id)) {

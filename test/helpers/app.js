@@ -13,7 +13,7 @@ const os = require('os');
 const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
-const { signDelivery } = require('openvibe-sdk/events');
+const { signDelivery, signDeliveryHeaders } = require('openvibe-sdk/events');
 const { startNetwork, startBilling, startEvents, startLive } = require('./stubs');
 
 const EVENTS_SECRET = 'e'.repeat(48);
@@ -70,12 +70,16 @@ async function boot(opts = {}) {
         return { status: res.status, headers: res.headers, json, text };
     }
 
-    /** POST a signed Events delivery of `event` (as OpenVibe.Events would). */
-    async function deliver(event, { secret = EVENTS_SECRET, seq = 1 } = {}) {
+    /**
+     * POST a signed Events delivery of `event` (as OpenVibe.Events would: v1 and v2 headers).
+     * `v1Only` sends only X-OpenVibe-Signature; `now` (ms) backdates the v2 timestamp.
+     */
+    async function deliver(event, { secret = EVENTS_SECRET, seq = 1, v1Only = false, now } = {}) {
         const raw = JSON.stringify({ event, seq });
+        const sig = v1Only ? { 'X-OpenVibe-Signature': signDelivery(raw, secret) } : signDeliveryHeaders(raw, secret, { now });
         const res = await fetch(`${base}/internal/events`, {
             method: 'POST', body: raw,
-            headers: { 'Content-Type': 'application/json', 'X-OpenVibe-Signature': signDelivery(raw, secret), 'X-OpenVibe-Seq': String(seq) },
+            headers: { 'Content-Type': 'application/json', ...sig, 'X-OpenVibe-Seq': String(seq) },
         });
         return { status: res.status, json: await res.json().catch(() => null) };
     }
