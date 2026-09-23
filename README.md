@@ -2,8 +2,9 @@
 
 > Creator support: tips, goals, paid messages, TTS and media requests, overlays.
 
-**Status:** alpha — runtime built and tested against stubs (roadmap Wave 9); not deployed. OpenVibe.Live
-remains where tips happen until the Billing cutover and the Live chat patch ship (see *What waits*).  
+**Status:** alpha — runtime built and tested against stubs (roadmap Wave 9). Deployed internally, not
+launched: running on the host since 2026-09-23 on `127.0.0.1:4610` only, with an empty database and no
+public route. OpenVibe.Live remains where tips happen until the Billing cutover (see *What waits*).  
 **Domain:** `openvibe.tips` (keeps its OpenVibe.Sites placeholder until the launch rule below holds)  
 **Port / service id:** 4610 / `tips`  
 **Decision:** [ADR-012](https://github.com/OpenVibers/OpenVibe.Contracts/blob/main/docs/adr/ADR-012-economic-classification.md) — Tips never moves money; Billing does.  
@@ -38,7 +39,7 @@ from *interaction delivered*.
 - **OpenVibe.Events** — Billing's events in (signed webhook + openvibe-sdk inbox), Tips' events out
   (openvibe-sdk transactional outbox)
 - **OpenVibe.Network** — SSO for people, service tokens, JWKS, identity resolve (importer)
-- **OpenVibe.Live** — chat delivery through `/internal/tips/deliveries` ([docs/live-patch.diff](docs/live-patch.diff)) until OpenVibe.Chat exposes paid messages; overlay consumer
+- **OpenVibe.Live** — chat delivery through `/internal/tips/deliveries` (deployed in Live since `f11f809`; [docs/live-patch.diff](docs/live-patch.diff) is the original patch) until OpenVibe.Chat exposes paid messages; overlay consumer
 - **OpenVibe.Shared** v1.2.1 (app icon, SSR footer, noscript nav, release manifest, legal pages) and
   the Network's `navbar.js`
 
@@ -53,9 +54,10 @@ npm run subscribe               # create the billing.transaction.* subscription 
 node scripts/import-live.js --live-db <live snapshot> --billing-db <billing snapshot> [--dry-run] [--json]
 ```
 
-Production (when launched): `/opt/openvibe.tips`, env `/etc/openvibe/tips.env`, unit
-[deploy/systemd/openvibe-tips.service](deploy/systemd/openvibe-tips.service) (state in `/var/lib/openvibe-tips`),
-vhost [deploy/nginx/openvibe.tips.conf](deploy/nginx/openvibe.tips.conf).
+Production (deployed, loopback only): `/opt/openvibe.tips`, env `/etc/openvibe/tips.env`, unit
+[deploy/systemd/openvibe-tips.service](deploy/systemd/openvibe-tips.service) (state in `/var/lib/openvibe-tips`).
+The vhost [deploy/nginx/openvibe.tips.conf](deploy/nginx/openvibe.tips.conf) is not installed yet:
+`openvibe.tips` still serves the Sites placeholder.
 
 ## Design
 
@@ -122,11 +124,12 @@ token as a Bearer and act on their own things only. The API never reads cookies.
 | `POST /simulate` | `tips.simulation.run` | owner |
 | `POST /internal/events` | Events webhook signature (`TIPS_EVENTS_SECRET`), loopback only | — |
 
-Capabilities are proposed in [docs/capabilities-proposal/](docs/capabilities-proposal/) (3-segment ids:
+The capabilities and the service manifest are released in openvibe-contracts v0.15.0 (3-segment ids:
 the charter's `tips.simulate` is `tips.simulation.run`; `tips.interaction.record` is new, for EXTERNAL
-tips) with a service manifest in [docs/service-manifest-proposal.json](docs/service-manifest-proposal.json).
-Until a contracts release carries them, grants are matched with contracts' `capabilities.grants()` (exact
-id or a `.*` family), as Billing did before v0.8.0.
+tips); the drafts stay in [docs/capabilities-proposal/](docs/capabilities-proposal/) and
+[docs/service-manifest-proposal.json](docs/service-manifest-proposal.json). Grants are matched with
+contracts' `capabilities.grants()` (exact id or a `.*` family). Contracts has no `tips.*` event payload
+schemas yet.
 
 ## Events
 
@@ -154,10 +157,10 @@ retries). `live-chat` posts to Live's `/internal/tips/deliveries` with Tips' ser
 `openvibe.live`, `live.tips_delivery.write`), `Idempotency-Key = <interaction>:<effect>`; Live does what
 `POST /api/funds/donate` does after the money moved (channel + global broadcast, a `donation` chat
 message, the alert sound), TTS through `synthesizeAndBroadcastTTS`, media requests into its queue at no
-charge. Live has no such route today: [docs/live-patch.diff](docs/live-patch.diff) adds it with a test
-(applies to Live `seadragon` with `git apply`; its test passes in a scratch copy of Live). `test`
+charge. The route came from [docs/live-patch.diff](docs/live-patch.diff) and is deployed in Live since
+`f11f809` (its idempotency record is in memory only); nothing calls it yet. `test`
 records jobs in memory (development; simulations always use it). `none` (the production default) creates
-no chat effects. When OpenVibe.Chat publishes a paid-message capability, a `chat` adapter replaces
+no chat effects, and it is what production runs. When OpenVibe.Chat publishes a paid-message capability, a `chat` adapter replaces
 `live-chat`.
 
 ## Pages (server-rendered, useful without JavaScript)
@@ -204,7 +207,7 @@ a copy of Billing's database for the links and totals:
   `TIPS_POWERCHAT_LINK_TEMPLATE` or Billing returning the link.
 - **EXTERNAL PowerChat tips** reach Billing's webhook, which records them with no effect and no event;
   until Billing emits one (or Live forwards them with `tips.interaction.record`), Tips does not see them.
-- **Chat**: `live-chat` needs the Live patch deployed and the grant below; OpenVibe.Chat has no public
+- **Chat**: `live-chat` needs `TIPS_CHAT_ADAPTER=live-chat` after the cutover (Live's route is deployed); OpenVibe.Chat has no public
   paid-message/TTS capability yet. The Live patch's media-request path (yt-dlp/oEmbed) is not covered by
   its test.
 - **Refunds of paid media requests** that never played (Billing's `POST /transfers/:id/refund`) are not
@@ -218,13 +221,14 @@ This repository does not make the product real, and the domain keeps its placeho
 exist here (plan §12.12):
 
 1. an owning runtime with health/readiness endpoints and observability — ✔ `/api/health`, `/api/ready`
-   (DB + Network key), outbox status in health;
-2. canonical identity/auth integration (Network subjects, scoped service principals) — ✔ in code;
-   the `tips` principal and grants are not provisioned yet;
+   (DB + Network key), outbox status in health; no `/metrics` yet;
+2. canonical identity/auth integration (Network subjects, scoped service principals) — ✔; the `tips`
+   principal is provisioned on the host;
 3. server-rendered public routes useful without JavaScript — ✔;
 4. real persistence and end-to-end workflows — ✔ against stubs; not yet against the real Billing and
-   Events;
-5. capability and event registration against OpenVibe.Contracts — proposed, not released;
+   Events (Billing is in shadow and has sent no events; the production database is empty; the Live
+   import has not been run);
+5. capability and event registration against OpenVibe.Contracts — ✔ v0.15.0 (no event payload schemas yet);
 6. a migration/seed strategy ✔, a security/threat review (not done beyond the tests' refusals), and
    sitemap/robots ✔ (no feed);
 7. acceptance tests proving the advertised functionality — ✔ (table above).
