@@ -232,7 +232,9 @@ This repository does not make the product real, and the domain keeps its placeho
 exist here (plan §12.12):
 
 1. an owning runtime with health/readiness endpoints and observability — ✔ `/api/health`, `/api/ready`
-   (DB + Network key), outbox status in health; no `/metrics` yet;
+   (openvibe-shared/ready: the database required; Network key, Billing and Events optional, so
+   their loss degrades rather than fails), `/metrics` for direct loopback callers (golden signals by
+   route template, pending effects and overlay deliveries, outbox backlog);
 2. canonical identity/auth integration (Network subjects, scoped service principals) — ✔; the `tips`
    principal is provisioned on the host;
 3. server-rendered public routes useful without JavaScript — ✔;

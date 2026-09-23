@@ -4,7 +4,7 @@
  * OpenVibe.Tips — creator support: tips, goals, paid messages, TTS and media requests, overlays.
  * Express app factory; server/index.js listens, tests build their own instance.
  *
- *   GET  /api/health, /api/ready, /release.json
+ *   GET  /api/health, /api/ready, /release.json, /metrics (direct loopback callers only)
  *   /api/v1/*                     API (service tokens + user tokens, see api/v1.js)
  *   POST /internal/events         Billing settlement events from OpenVibe.Events (signed webhook + inbox)
  *   /auth/*                       Network SSO session for the pages
@@ -31,6 +31,7 @@ const { createSessionRoutes } = require('./web/session');
 const { createWebRoutes } = require('./web/routes');
 const { createLayout, assetVersion } = require('./web/layout');
 const pages = require('./web/pages');
+const { createTipsReadiness, registerTipsGauges } = require('./observability');
 
 const VERSION = require('../package.json').version;
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -54,6 +55,12 @@ function createApp(opts = {}) {
     const app = express();
     app.disable('x-powered-by');
     app.set('trust proxy', config.trustProxy);
+    // HTTP golden signals by route template, process metrics, release_info; GET /metrics answers
+    // direct loopback callers only (Track O). An overlay's SSE stream is a session, not a request.
+    const metrics = require('openvibe-shared/metrics').instrument(app, {
+        service: 'tips', release: release.release, skip: (req) => /^\/overlay\/[^/]+\/events$/.test(req.path),
+    });
+    registerTipsGauges(metrics.registry, { db, outbox, now });
     app.use(http.middleware());
     app.use((req, res, next) => {
         res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -71,13 +78,10 @@ function createApp(opts = {}) {
     app.get('/api/health', (req, res) => res.json({
         ok: true, service: 'tips', version: VERSION, chat_adapter: config.chat.adapter, events: outbox.status(),
     }));
-    app.get('/api/ready', (req, res) => {
-        const problems = [];
-        try { db.prepare('SELECT 1 FROM settings WHERE id = 1').get(); } catch (e) { problems.push(`database: ${e.message}`); }
-        if (!keys.get()) problems.push('Network public key not loaded');
-        if (problems.length) return http.sendProblem(res, 503, 'service.not_ready', { detail: problems.join('; '), ctx: req.ov });
-        return res.json({ ready: true });
-    });
+    // Readiness (openvibe-shared/ready): 503 only when the database fails; Network key, Billing and
+    // Events are optional and degrade it (see observability.js).
+    const readiness = createTipsReadiness({ db, keys, config, outbox, release: release.release, fetchImpl });
+    app.get('/api/ready', readiness.handler);
     app.get('/release.json', release.handler);
 
     const consumer = consumerRouter({ domain, config, log });
@@ -113,7 +117,7 @@ function createApp(opts = {}) {
         return res.status(500).type('html').send(layout.page({ title: 'Error', robots: 'noindex', body: pages.errorPage({ status: 500, title: 'Something went wrong', message: 'This one is on us. Please try again.' }) }));
     });
 
-    Object.assign(app.locals, { config, db, domain, keys, outbox, adapters, billing, consumer });
+    Object.assign(app.locals, { config, db, domain, keys, outbox, adapters, billing, consumer, metrics });
     return app;
 }
 

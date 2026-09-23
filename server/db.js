@@ -203,6 +203,7 @@ CREATE TABLE IF NOT EXISTS overlay_deliveries (
     created_at      TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_ovd_creator ON overlay_deliveries (creator_subject, seq);
+CREATE INDEX IF NOT EXISTS idx_ovd_pending ON overlay_deliveries (seq) WHERE status = 'pending';
 
 CREATE TABLE IF NOT EXISTS interaction_effects (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,

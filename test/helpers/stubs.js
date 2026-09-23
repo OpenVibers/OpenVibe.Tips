@@ -7,6 +7,7 @@
  *                   matter here (idempotency keys, funds, self-dealing, capability + audience checks),
  *                   and the billing.transaction.* envelopes it would publish (billing.events)
  *   startEvents()   POST /api/v1/events recording what Tips' outbox relays
+ *   (Billing and Events also answer GET /api/health, which /api/ready probes)
  *   startLive()     POST /internal/tips/deliveries recording chat deliveries (the live-chat adapter)
  */
 const http = require('http');
@@ -125,6 +126,7 @@ async function startBilling(network) {
 
     const server = http.createServer(async (req, res) => {
         const raw = await readBody(req);
+        if (req.url === '/api/health') return send(res, state.down ? 503 : 200, state.down ? { code: 'billing.unavailable' } : { ok: true, service: 'billing' });
         const body = raw ? JSON.parse(raw) : {};
         calls.push({ method: req.method, url: req.url, body, key: req.headers['idempotency-key'] || null });
         if (state.down) return send(res, 503, { code: 'billing.unavailable' });
@@ -178,6 +180,7 @@ async function startEvents() {
     const tokens = [];
     const server = http.createServer(async (req, res) => {
         const raw = await readBody(req);
+        if (req.url === '/api/health') return send(res, 200, { status: 'ok', service: 'openvibe-events' });
         tokens.push(req.headers.authorization);
         if (req.url === '/api/v1/events' && req.method === 'POST') {
             const b = JSON.parse(raw);
