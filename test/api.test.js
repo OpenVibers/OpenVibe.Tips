@@ -19,6 +19,8 @@ const { boot, check, done } = require('./helpers/app');
         assert.strictEqual(r.json.ready, true);
         const rel = await t.call('GET', '/release.json', { token: null });
         assert.strictEqual(rel.json.service, 'tips');
+        assert.deepStrictEqual(require('openvibe-contracts').validate('registry.release-manifest@1', rel.json).errors, []);
+        assert.strictEqual(rel.json.metrics_url, '/release-metrics');
     });
 
     await check('a service token for another audience, or without the capability, is refused', async () => {

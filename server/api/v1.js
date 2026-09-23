@@ -61,7 +61,7 @@ const CAP = {
     configGet: 'tips.overlay.config.get',
     configUpdate: 'tips.overlay.config.update',
     simulate: 'tips.simulation.run',
-    moderate: 'tips.interaction.moderate',   // proposed (docs/capabilities-proposal/), not yet in openvibe-contracts
+    moderate: 'tips.interaction.moderate',   // in openvibe-contracts since v0.32.0 (was docs/capabilities-proposal/)
 };
 
 function v1Router({ domain, apiAuth }) {

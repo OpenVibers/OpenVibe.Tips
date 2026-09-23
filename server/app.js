@@ -82,7 +82,8 @@ function createApp(opts = {}) {
     // Events are optional and degrade it (see observability.js).
     const readiness = createTipsReadiness({ db, keys, config, outbox, release: release.release, fetchImpl });
     app.get('/api/ready', readiness.handler);
-    app.get('/release.json', release.handler);
+    // GET /release.json (ADR-016) and POST /release-metrics: open tabs' update reports into /metrics.
+    release.mount(app, { registry: metrics.registry });
 
     const consumer = consumerRouter({ domain, config, log });
     // Service-to-service only: OpenVibe.Events calls 127.0.0.1:4610 directly; anything that came

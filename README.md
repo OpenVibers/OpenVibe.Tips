@@ -41,7 +41,7 @@ from *interaction delivered*.
   (openvibe-sdk transactional outbox)
 - **OpenVibe.Network** — SSO for people, service tokens, JWKS, identity resolve (importer)
 - **OpenVibe.Live** — chat delivery through `/internal/tips/deliveries` (deployed in Live since `f11f809`; [docs/live-patch.diff](docs/live-patch.diff) is the original patch) until OpenVibe.Chat exposes paid messages; overlay consumer
-- **OpenVibe.Shared** v1.3.0 (app icon, SSR footer, noscript nav, release manifest, legal pages) and
+- **OpenVibe.Shared** v1.5.0 (app icon, SSR footer, noscript nav, release manifest, legal pages) and
   the Network's `navbar.js`
 
 ## Run it
@@ -121,9 +121,9 @@ token as a Bearer and act on their own things only. The API never reads cookies.
 | `GET /goals?creator=`, `GET /goals/:id` | `tips.goal.update` (private; full view) | public shape when the page is on (the creator's page settings); owner sees contributions |
 | `GET /profiles/:creator/supporters` | `tips.profile.get` (while not public) | public when the creator shows the supporters page; the owner |
 | `GET /me/export`, `POST /me/erase` | — (people only) | the supporter's own tips: download; erase their data from them |
-| `GET /moderation?creator=&state=held\|hidden\|visible\|all` | `tips.interaction.moderate` (proposed) | the creator and their moderators |
-| `POST /interactions/:id/hide`, `POST /interactions/:id/restore` `{reason?}` | `tips.interaction.moderate` (proposed) | the creator and their moderators |
-| `GET /moderation/log?creator=` | `tips.interaction.moderate` (proposed) | owner |
+| `GET /moderation?creator=&state=held\|hidden\|visible\|all` | `tips.interaction.moderate` | the creator and their moderators |
+| `POST /interactions/:id/hide`, `POST /interactions/:id/restore` `{reason?}` | `tips.interaction.moderate` | the creator and their moderators |
+| `GET /moderation/log?creator=` | `tips.interaction.moderate` | owner |
 | `GET\|POST /moderators`, `POST /moderators/:subject/remove` | `tips.profile.update` | owner |
 | `POST /goals`, `PATCH /goals/:id`, `POST /goals/:id/close` | `tips.goal.create` / `.update` / `.close` | owner |
 | `GET\|POST /overlay-tokens`, `POST /overlay-tokens/:id/revoke` | `tips.overlay.token.create` / `.revoke` | owner |
@@ -131,15 +131,16 @@ token as a Bearer and act on their own things only. The API never reads cookies.
 | `POST /simulate` | `tips.simulation.run` | owner |
 | `POST /internal/events` | Events webhook signature (`TIPS_EVENTS_SECRET`), loopback only | — |
 
-`tips.interaction.moderate` is proposed in [docs/capabilities-proposal/](docs/capabilities-proposal/) and
-not in openvibe-contracts yet (grants are matched by string, so a Network grant of it works today).
+`tips.interaction.moderate` was proposed in [docs/capabilities-proposal/](docs/capabilities-proposal/)
+and is registered in openvibe-contracts v0.32.0.
 The capabilities and the service manifest were released in openvibe-contracts v0.15.0 (3-segment ids:
 the charter's `tips.simulate` is `tips.simulation.run`; `tips.interaction.record` is new, for EXTERNAL
 tips); the drafts stay in [docs/capabilities-proposal/](docs/capabilities-proposal/) and
 [docs/service-manifest-proposal.json](docs/service-manifest-proposal.json). Grants are matched with
-contracts' `capabilities.grants()` (exact id or a `.*` family). Tips pins openvibe-contracts v0.30.2,
-which also carries the payload schemas of the six `tips.*` events below; `test/contracts.test.js`
-validates every envelope and payload Tips produces against them.
+contracts' `capabilities.grants()` (exact id or a `.*` family). Tips pins openvibe-contracts v0.32.0,
+which also carries the payload schemas of the six `tips.*` events below (v0.30.2) and of
+`tips.interaction.moderated|erased` (v0.32.0); `test/contracts.test.js` validates every envelope and
+payload Tips produces against them.
 
 ## Privacy
 
@@ -203,8 +204,8 @@ toward its goal and the creator's totals.
 Produced through the openvibe-sdk outbox (table `event_outbox`, source `tips`, same transaction as the
 change; relayed when `EVENTS_URL` and the client secret are set): `tips.interaction.ready`,
 `tips.interaction.failed`, `tips.interaction.cancelled`, `tips.goal.updated`, `tips.overlay.delivered`,
-`tips.overlay.failed`, and two whose schemas are proposed in [docs/events-proposal/](docs/events-proposal/)
-(not yet in openvibe-contracts): `tips.interaction.erased` (a supporter's erasure; `{ interaction_id,
+`tips.overlay.failed`, and two whose schemas were proposed in [docs/events-proposal/](docs/events-proposal/)
+and are in openvibe-contracts since v0.32.0: `tips.interaction.erased` (a supporter's erasure; `{ interaction_id,
 creator, erased_at, redacts }`) and `tips.interaction.moderated` (`{ interaction_id, creator, action:
 filtered|held|hidden|restored, by: filter|creator|moderator|service, moderation_state, cancelled_effects }`).
 Simulations and Billing test money produce none. An anonymous supporter is never named in an event.
@@ -336,7 +337,7 @@ exist here (plan §12.12):
 4. real persistence and end-to-end workflows — ✔ against stubs; not yet against the real Billing and
    Events (Billing is in shadow and has sent no events; the production database is empty; the Live
    import has not been run);
-5. capability and event registration against OpenVibe.Contracts — ✔ v0.15.0, payload schemas in v0.30.2 (pinned);
+5. capability and event registration against OpenVibe.Contracts — ✔ v0.15.0, payload schemas in v0.30.2 and v0.32.0 (pinned);
 6. a migration/seed strategy ✔, a written threat review ✔ ([docs/threat-review.md](docs/threat-review.md),
    internal; an independent review is still due), and sitemap/robots ✔ (no feed);
 7. acceptance tests proving the advertised functionality — ✔ (table above).
