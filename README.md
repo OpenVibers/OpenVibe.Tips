@@ -41,7 +41,7 @@ from *interaction delivered*.
   (openvibe-sdk transactional outbox)
 - **OpenVibe.Network** — SSO for people, service tokens, JWKS, identity resolve (importer)
 - **OpenVibe.Live** — chat delivery through `/internal/tips/deliveries` (deployed in Live since `f11f809`; [docs/live-patch.diff](docs/live-patch.diff) is the original patch) until OpenVibe.Chat exposes paid messages; overlay consumer
-- **OpenVibe.Shared** v1.2.1 (app icon, SSR footer, noscript nav, release manifest, legal pages) and
+- **OpenVibe.Shared** v1.3.0 (app icon, SSR footer, noscript nav, release manifest, legal pages) and
   the Network's `navbar.js`
 
 ## Run it
@@ -50,7 +50,7 @@ from *interaction delivered*.
 fnm exec --using=22.22.1 npm install
 cp .env.example .env            # OV_OAUTH_CLIENT_SECRET, TIPS_FORM_SECRET, TIPS_EVENTS_SECRET, …
 npm run dev                     # http://localhost:4610
-npm test                        # 7 files: stub Network/Billing/Events/Live, temp DBs, random ports
+npm test                        # every test/*.test.js: stub Network/Billing/Events/Live, temp DBs, random ports
 npm run subscribe               # create the billing.transaction.* and billing.receipt.* subscriptions in OpenVibe.Events
 node scripts/import-live.js --live-db <live snapshot> --billing-db <billing snapshot> [--dry-run] [--json]
 ```
@@ -125,12 +125,13 @@ token as a Bearer and act on their own things only. The API never reads cookies.
 | `POST /simulate` | `tips.simulation.run` | owner |
 | `POST /internal/events` | Events webhook signature (`TIPS_EVENTS_SECRET`), loopback only | — |
 
-The capabilities and the service manifest are released in openvibe-contracts v0.15.0 (3-segment ids:
+The capabilities and the service manifest were released in openvibe-contracts v0.15.0 (3-segment ids:
 the charter's `tips.simulate` is `tips.simulation.run`; `tips.interaction.record` is new, for EXTERNAL
 tips); the drafts stay in [docs/capabilities-proposal/](docs/capabilities-proposal/) and
 [docs/service-manifest-proposal.json](docs/service-manifest-proposal.json). Grants are matched with
-contracts' `capabilities.grants()` (exact id or a `.*` family). Contracts has no `tips.*` event payload
-schemas yet.
+contracts' `capabilities.grants()` (exact id or a `.*` family). Tips pins openvibe-contracts v0.30.2,
+which also carries the payload schemas of the six `tips.*` events below; `test/contracts.test.js`
+validates every envelope and payload Tips produces against them.
 
 ## Events
 
@@ -241,7 +242,7 @@ exist here (plan §12.12):
 4. real persistence and end-to-end workflows — ✔ against stubs; not yet against the real Billing and
    Events (Billing is in shadow and has sent no events; the production database is empty; the Live
    import has not been run);
-5. capability and event registration against OpenVibe.Contracts — ✔ v0.15.0 (no event payload schemas yet);
+5. capability and event registration against OpenVibe.Contracts — ✔ v0.15.0, payload schemas in v0.30.2 (pinned);
 6. a migration/seed strategy ✔, a security/threat review (not done beyond the tests' refusals), and
    sitemap/robots ✔ (no feed);
 7. acceptance tests proving the advertised functionality — ✔ (table above).
