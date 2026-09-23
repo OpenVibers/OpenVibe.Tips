@@ -13,7 +13,7 @@ function liveFixture(file) {
         CREATE TABLE transactions (id INTEGER PRIMARY KEY, from_user_id INTEGER, to_user_id INTEGER, stream_id INTEGER, amount INTEGER NOT NULL,
             type TEXT NOT NULL, status TEXT DEFAULT 'completed', message TEXT, paypal_transaction_id TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE chat_messages (id INTEGER PRIMARY KEY, stream_id INTEGER, channel_user_id INTEGER, user_id INTEGER, username TEXT, message TEXT,
-            message_type TEXT DEFAULT 'chat', metadata TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+            message_type TEXT DEFAULT 'chat', metadata TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP);   -- Live's column name
         CREATE TABLE donation_goals (id INTEGER PRIMARY KEY, user_id INTEGER, title TEXT, target_amount INTEGER, current_amount INTEGER DEFAULT 0,
             is_active INTEGER DEFAULT 1, image_url TEXT, media_type TEXT, reached_at DATETIME, sort_order INTEGER DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE site_settings (key TEXT PRIMARY KEY, value TEXT);
@@ -31,7 +31,7 @@ function liveFixture(file) {
     t.run(7, 1, 2, null, 250, 'refund', 'completed', 'Refund: Song', '2026-02-04 10:00:00');
     t.run(8, null, 5, null, 1000, 'donation', 'completed', 'PowerChat tip via site account ($10.00)', '2026-02-05 12:00:00');
     t.run(9, null, 2, null, 1000, 'purchase', 'completed', null, '2026-01-20 12:00:00');
-    const c = db.prepare("INSERT INTO chat_messages (id, channel_user_id, username, message, message_type, metadata, created_at) VALUES (?, ?, ?, ?, 'donation', ?, ?)");
+    const c = db.prepare("INSERT INTO chat_messages (id, channel_user_id, username, message, message_type, metadata, timestamp) VALUES (?, ?, ?, ?, 'donation', ?, ?)");
     c.run(1, 5, 'Fan', 'Fan tipped 1000 Vibes (PowerChat)', JSON.stringify({ kind: 'donation', amount: 1000, message: '', username: 'Fan', source: 'powerchat' }), '2026-02-05 12:00:30');
     c.run(2, 1, 'Direct', 'Direct tipped 700 Vibes (PowerChat)', JSON.stringify({ kind: 'donation', amount: 700, message: 'love it', username: 'Direct', source: 'powerchat' }), '2026-02-06 09:00:00');
     c.run(3, 1, 'Viewer', 'Viewer donated 500 Vibes: nice', JSON.stringify({ kind: 'donation', amount: 500, username: 'Viewer' }), '2026-02-01 10:00:01');

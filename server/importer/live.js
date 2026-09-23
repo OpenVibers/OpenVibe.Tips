@@ -92,8 +92,10 @@ async function importLive(domain, { live, billingSource = null, resolveLiveUsers
     // ── Read the snapshot ────────────────────────────────────
     const txns = tableExists(live, 'transactions') ? live.prepare("SELECT * FROM transactions WHERE type IN ('donation', 'refund') ORDER BY id").all() : [];
     const chatCols = columns(live, 'chat_messages');
+    // Live's chat_messages carries its time in `timestamp` (older snapshots: created_at).
+    const chatTs = chatCols.includes('created_at') ? 'created_at' : (chatCols.includes('timestamp') ? 'timestamp' : 'NULL');
     const chatDonations = chatCols.includes('metadata')
-        ? live.prepare("SELECT id, channel_user_id, username, message, metadata, created_at FROM chat_messages WHERE message_type = 'donation' AND metadata LIKE '%powerchat%' ORDER BY id").all()
+        ? live.prepare(`SELECT id, channel_user_id, username, message, metadata, ${chatTs} AS created_at FROM chat_messages WHERE message_type = 'donation' AND metadata LIKE '%powerchat%' ORDER BY id`).all()
         : [];
     const goalRows = tableExists(live, 'donation_goals') ? live.prepare('SELECT * FROM donation_goals ORDER BY id').all() : [];
     const users = new Map((tableExists(live, 'users') ? live.prepare('SELECT id, username, display_name FROM users').all() : []).map((u) => [String(u.id), u]));
