@@ -21,6 +21,10 @@
  *                     a site-routed PowerChat tip) is recorded once, by its Billing transaction id.
  *   external          a tip on the creator's own PowerChat account: no Billing liability; recorded
  *                     once by (provider, provider_ref); never part of the Billing reconciliation.
+ *                     Two ways in: POST /interactions/external (a service records it), or Billing's
+ *                     billing.receipt.external once Billing receives the PowerChat webhook — then
+ *                     nobody else announces it, so Tips delivers the chat line itself (origin
+ *                     'billing-external'), exactly as Live's webhook did: chat line + alert, goal.
  *   simulated         the whole effect path with test = 1: no Billing call, no goal contribution,
  *                     no durable event, excluded from every total.
  *
@@ -33,6 +37,11 @@ const { VOICES } = require('./profiles');
 const { BillingCallError } = require('../billing-client');
 
 const KINDS = ['tip', 'paid_message', 'tts', 'media_request'];
+// Origins whose chat effects Tips delivers: its own requests, and EXTERNAL tips Billing announced
+// (their only announcement since the PowerChat webhook moved from Live to Billing).
+const ANNOUNCED_HERE = ['tips', 'billing-external'];
+const SUBJECT_RE = /^usr_[0-9A-HJKMNP-TV-Z]{26}$/;
+const MAX_EXTERNAL_CENTS = 100_000_000;   // Billing's per-receipt maximum
 // Paid-message highlight time by amount (bits): the bigger the message, the longer it stays up.
 const HIGHLIGHT = [[5000, 300], [1000, 120], [500, 60], [100, 30]];
 const highlightFor = (bits) => (HIGHLIGHT.find(([min]) => bits >= min) || [0, 0])[1];
@@ -251,7 +260,7 @@ function createInteractions(ctx) {
         // Chat effects: never for imports (history), never twice for a donation another product already
         // announced (origin billing), never to a real chat room for a simulation.
         const adapter = test ? 'test' : config.chat.adapter;
-        if (i.origin === 'tips' && adapter !== 'none') {
+        if (ANNOUNCED_HERE.includes(i.origin) && adapter !== 'none') {
             if (i.kind === 'tip') addEffect(i, 'chat_line', adapter);
             if (i.kind === 'paid_message') addEffect(i, 'paid_message', adapter);
             if (i.kind === 'tts') { addEffect(i, 'chat_line', adapter); addEffect(i, 'tts', adapter); }
@@ -379,6 +388,55 @@ function createInteractions(ctx) {
         return get(id);
     }
 
+    /**
+     * The goal a PowerChat tip asked for: its app_purpose/app_ref carries `goal:<id>` — a Tips goal id,
+     * or a Live donation_goals id (links minted by Live), which the Live import mapped to a Tips goal.
+     * goals.contribute() still checks it is the creator's and active, else falls back to Live's rule.
+     */
+    function goalFromPurpose(...refs) {
+        for (const v of refs) {
+            const m = String(v || '').match(/(?:^|[:_-])goal[:_-]?([A-Za-z0-9_]+)/i);
+            if (!m) continue;
+            if (/^\d+$/.test(m[1])) {
+                const map = db.prepare("SELECT target_id FROM migration_maps WHERE source = 'live' AND source_table = 'donation_goals' AND source_id = ? AND status = 'imported'").get(m[1]);
+                if (map && map.target_id) return map.target_id;
+                continue;
+            }
+            return m[1];
+        }
+        return null;
+    }
+
+    /**
+     * Billing announced an EXTERNAL receipt (billing.receipt.external): a tip paid on the creator's own
+     * PowerChat. Inside the inbox transaction. Recorded once by (provider, provider event id) — the same
+     * key POST /interactions/external uses — settled at once (the provider already confirmed it), and
+     * announced by Tips: chat line through the chat adapter, overlay alert, goal contribution.
+     */
+    function onBillingExternal(p) {
+        const provider = String(p.provider || '').toLowerCase();
+        const ref = String(p.provider_event_id || '').trim();
+        if (!/^[a-z][a-z0-9_-]{1,39}$/.test(provider) || !ref || ref.length > 200) return 'ignored:no_reference';
+        const creator = p.streamer && p.streamer.type === 'user' && SUBJECT_RE.test(String(p.streamer.id || '')) ? p.streamer.id : null;
+        if (!creator) return 'ignored:no_streamer';
+        const cents = Number(p.amount_cents);
+        if (!Number.isSafeInteger(cents) || cents < 1 || cents > MAX_EXTERNAL_CENTS) return 'ignored:no_amount';
+        if (db.prepare('SELECT 1 FROM tip_interactions WHERE provider = ? AND provider_ref = ?').get(provider, ref)) return 'duplicate_receipt';
+        // Goals and the chat line count Vibes: the value Billing put on the money (1 bit = 1 cent today).
+        const bits = Number(p.value_bits);
+        const amount = Math.min(Number.isSafeInteger(bits) && bits > 0 ? bits : cents, config.limits.maxBits);
+        const message = p.message ? String(p.message).replace(/\r\n?/g, '\n').trim().slice(0, config.limits.messageChars) || null : null;
+        const goalId = goalFromPurpose(p.app_purpose, p.app_ref);
+        const i = insert({
+            id: prefixedId('tint', ctx.now()), creator_subject: creator, supporter_subject: null,
+            supporter_name: p.anonymous ? 'Anonymous' : (displayName(p.donor_name) || 'Someone'), kind: 'tip', amount, amount_cents: cents,
+            message, request: goalId ? { goal_id: goalId } : {}, funding: 'external', settlement: 'external', payment_state: 'pending',
+            delivery_state: 'awaiting_payment', provider, provider_ref: ref, origin: 'billing-external', test: p.test ? 1 : 0,
+        });
+        settle(i);
+        return 'recorded_external';
+    }
+
     // ── External and simulated ───────────────────────────────
     /** A tip on the creator's own PowerChat (EXTERNAL, ADR-012): recorded once by provider ref. */
     function recordExternal(profile, input) {
@@ -489,7 +547,7 @@ function createInteractions(ctx) {
 
     return {
         get, byBillingTxn, validate, request, transfer, startCheckout, processDueTransfers, settleByTransaction, settle, failPayment,
-        onBillingSettled, onBillingReversed, cancelQueued, recomputeDelivery, recordExternal, simulate, summary, present, list, totals, insert, KINDS,
+        onBillingSettled, onBillingReversed, onBillingExternal, cancelQueued, recomputeDelivery, recordExternal, simulate, summary, present, list, totals, insert, KINDS,
     };
 }
 

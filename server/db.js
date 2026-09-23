@@ -83,7 +83,7 @@ CREATE TABLE IF NOT EXISTS tip_interactions (
     legacy_source       TEXT,                               -- 'live:transactions:<id>' etc.
     idempotency_key     TEXT UNIQUE,
     failure             TEXT,
-    origin              TEXT NOT NULL DEFAULT 'tips',       -- tips | billing (settled elsewhere) | external | import
+    origin              TEXT NOT NULL DEFAULT 'tips',       -- tips | billing (settled elsewhere) | external | billing-external (announced by Billing, delivered here) | import
     transfer_due        INTEGER NOT NULL DEFAULT 0,         -- a Billing transfer still has to be (re)tried
     transfer_attempts   INTEGER NOT NULL DEFAULT 0,
     next_transfer_at    INTEGER NOT NULL DEFAULT 0,

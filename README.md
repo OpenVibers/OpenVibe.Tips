@@ -35,7 +35,8 @@ from *interaction delivered*.
 ## Depends on
 
 - **OpenVibe.Billing** — `POST /api/v1/intents` (checkout), `POST /api/v1/transfers` (a tip from credit),
-  `billing.transaction.settled|reversed` events
+  `billing.transaction.settled|reversed` events, and `billing.receipt.external` (a tip on a creator's own
+  PowerChat, once Billing receives the PowerChat webhook)
 - **OpenVibe.Events** — Billing's events in (signed webhook + openvibe-sdk inbox), Tips' events out
   (openvibe-sdk transactional outbox)
 - **OpenVibe.Network** — SSO for people, service tokens, JWKS, identity resolve (importer)
@@ -49,8 +50,8 @@ from *interaction delivered*.
 fnm exec --using=22.22.1 npm install
 cp .env.example .env            # OV_OAUTH_CLIENT_SECRET, TIPS_FORM_SECRET, TIPS_EVENTS_SECRET, …
 npm run dev                     # http://localhost:4610
-npm test                        # 6 files: stub Network/Billing/Events/Live, temp DBs, random ports
-npm run subscribe               # create the billing.transaction.* subscription in OpenVibe.Events
+npm test                        # 7 files: stub Network/Billing/Events/Live, temp DBs, random ports
+npm run subscribe               # create the billing.transaction.* and billing.receipt.* subscriptions in OpenVibe.Events
 node scripts/import-live.js --live-db <live snapshot> --billing-db <billing snapshot> [--dry-run] [--json]
 ```
 
@@ -80,7 +81,7 @@ delivery record; a reversal before delivery cancels the queued effects (`tips.in
 | `credit` | `POST /transfers {from: supporter, to: creator, kind: tip\|paid_interaction, target: {service: tips, type: interaction, id}}`, `Idempotency-Key: tips:transfer:<id>` | the response (the settled event for that transaction is then a no-op) |
 | `checkout` | `POST /intents {kind: purchase, subject: supporter, bits: amount}`, key `tips:intent:<id>` → checkout URL | the purchase's `billing.transaction.settled` (metadata.intent_id) triggers the transfer above — CREDIT becomes MONEY only by giving it (ADR-012 rule 3) |
 | `provider` / origin `billing` | nothing — a donation settled in Billing that Tips did not start (Live's donate flow, a site-routed PowerChat tip) | recorded once by its Billing transaction id; overlay + goals, no second chat line |
-| `external` | nothing — a tip on the creator's own PowerChat (ADR-012 EXTERNAL) | `POST /api/v1/interactions/external`, once per (provider, provider_ref); never in Billing totals |
+| `external` | nothing — a tip on the creator's own PowerChat (ADR-012 EXTERNAL) | `POST /api/v1/interactions/external`, or Billing's `billing.receipt.external` (origin `billing-external`: Tips posts the chat line — `… tipped N Vibes: msg (PowerChat)` — plus overlay alert and goal, as Live's webhook did); once per (provider, provider_ref); never in Billing totals |
 | `none` (simulation) | nothing | at once, `test = 1`: full effect path, no goal contribution, no durable event, excluded from totals |
 
 **Exactly one logical interaction:** the inbox claims `(consumer, event_id)` in the same SQLite
@@ -137,7 +138,13 @@ Produced through the openvibe-sdk outbox (table `event_outbox`, source `tips`, s
 change; relayed when `EVENTS_URL` and the client secret are set): `tips.interaction.ready`,
 `tips.interaction.failed`, `tips.interaction.cancelled`, `tips.goal.updated`, `tips.overlay.delivered`,
 `tips.overlay.failed`. Simulations and Billing test money produce none. Consumed:
-`billing.transaction.settled`, `billing.transaction.reversed` (only from source `billing`).
+`billing.transaction.settled`, `billing.transaction.reversed`, `billing.receipt.external` (only from source
+`billing`). `billing.receipt.external` (payload: `streamer` SubjectRef, `amount_cents`, `value_bits`,
+`donor_name` — null when `anonymous` — `message`, `provider`, `provider_event_id`, `app_purpose`/`app_ref`,
+`test`) is sent by Billing only once it is the money authority (`BILLING_AUTHORITY=billing` in
+billing.env); before that Live's own PowerChat webhook announces those tips, so nothing is announced
+twice. A `goal:<id>` in `app_purpose`/`app_ref` picks the goal: a Tips goal id, or a Live `donation_goals`
+id mapped by the Live import; otherwise Live's rule (the only active goal).
 
 ## Overlays
 
@@ -198,6 +205,7 @@ a copy of Billing's database for the links and totals:
 | the creator can use openvibe.tips with Live offline | pages, API, overlays and settlement need no Live call (`test/pages.test.js`, `test/overlays.test.js` run with no Live); only the `live-chat` adapter talks to Live and its failure never touches payment (`test/delivery.test.js`) — **not yet demonstrated on the real host** |
 | creator totals reconcile exactly to Billing | `test/import.test.js` (fixtures in Live's schema and Billing's importer keys; a Billing donation Tips never saw is reported, then reconciles once its event arrives); `test/api.test.js` (totals = the stub Billing payable) |
 | simulation never counted; token revocation immediate; goals from settled only; reversal keeps the delivery record | `test/overlays.test.js`, `test/api.test.js`, `test/settlement.test.js` |
+| an EXTERNAL PowerChat tip Billing announced is celebrated once: Live chat line, overlay, goal; never Billing money | `test/external.test.js` (redelivery and republish, same key as `POST /interactions/external`, Tips and Live goal ids, anonymous, test receipts, malformed payloads) |
 
 ## What waits
 
@@ -205,8 +213,11 @@ a copy of Billing's database for the links and totals:
   still happen on Live; Tips can only record them from Billing events once Live sends donations as
   Billing transfers. For PowerChat checkout, Billing answers with a `checkout_ref` and no URL — Tips needs
   `TIPS_POWERCHAT_LINK_TEMPLATE` or Billing returning the link.
-- **EXTERNAL PowerChat tips** reach Billing's webhook, which records them with no effect and no event;
-  until Billing emits one (or Live forwards them with `tips.interaction.record`), Tips does not see them.
+- **EXTERNAL PowerChat tips** arrive as `billing.receipt.external` once Billing is the authority. They need
+  the `billing.receipt.*` subscription (`npm run subscribe`) and `TIPS_CHAT_ADAPTER=live-chat`; Live's
+  `/internal/tips/deliveries` posts the chat line and plays the alert but does not advance **Live's own**
+  `donation_goals` or send its `goal-update`/`goal-reached` frames (Tips' goals and overlay do advance).
+  PowerChat follow/host/channel-points/subscription notices are not forwarded by anyone.
 - **Chat**: `live-chat` needs `TIPS_CHAT_ADAPTER=live-chat` after the cutover (Live's route is deployed); OpenVibe.Chat has no public
   paid-message/TTS capability yet. The Live patch's media-request path (yt-dlp/oEmbed) is not covered by
   its test.

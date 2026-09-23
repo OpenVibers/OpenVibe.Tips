@@ -1,14 +1,18 @@
 'use strict';
 
 /**
- * Billing → Tips: POST /internal/events, the endpoint of Tips' OpenVibe.Events subscription
- * (topic pattern `billing.transaction.*`, created by scripts/subscribe.js).
+ * Billing → Tips: POST /internal/events, the endpoint of Tips' OpenVibe.Events subscriptions
+ * (topic patterns `billing.transaction.*` and `billing.receipt.*`, created by scripts/subscribe.js).
  *
  *   billing.transaction.settled   a donation targeting a Tips interaction settles it; a donation Tips
  *                                 did not start is recorded once; a purchase that funds a Tips
  *                                 checkout triggers the transfer
  *   billing.transaction.reversed  flips the interaction's payment state; undelivered effects are
  *                                 cancelled, delivered ones stay on record
+ *   billing.receipt.external      a tip on the creator's own PowerChat (EXTERNAL, no Billing money):
+ *                                 recorded once by (provider, provider event id) and announced by Tips —
+ *                                 chat line, overlay alert, goal. Billing sends it only once it is the
+ *                                 money authority (while Live is, Live's webhook announces the tip)
  *
  * Exactly once, twice over: the openvibe-sdk inbox claims (consumer, event_id) in the same SQLite
  * transaction as the change, so a redelivered event does nothing; and the Billing transaction id is
@@ -37,6 +41,7 @@ function consumerRouter({ domain, config, log = console }) {
                 const payload = event.payload && typeof event.payload === 'object' ? event.payload : {};
                 if (event.event_type === 'billing.transaction.settled') return domain.interactions.onBillingSettled(payload);
                 if (event.event_type === 'billing.transaction.reversed') return domain.interactions.onBillingReversed(payload);
+                if (event.event_type === 'billing.receipt.external') return domain.interactions.onBillingExternal(payload);
                 return 'ignored:type';
             });
             return r.duplicate ? { duplicate: true, outcome: null } : { duplicate: false, outcome: r.result };

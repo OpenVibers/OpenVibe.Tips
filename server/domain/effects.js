@@ -27,7 +27,8 @@ function createEffects(ctx) {
             creator: { type: 'user', id: i.creator_subject, handle: profile ? profile.handle : null },
             supporter: { name, subject: i.supporter_subject ? { type: 'user', id: i.supporter_subject } : null },
             interaction: { id: i.id, kind: i.kind, amount: i.amount, currency: i.currency, message: i.message || null },
-            text: `${name} tipped ${amount} Vibes${i.message ? `: ${i.message}` : ''}`,
+            // A tip on the creator's own PowerChat reads as Live's webhook wrote it: "… (PowerChat)".
+            text: `${name} tipped ${amount} Vibes${i.message ? `: ${i.message}` : ''}${i.settlement === 'external' && i.provider === 'powerchat' ? ' (PowerChat)' : ''}`,
             target: json(i.target, null),
         };
         if (effect.effect === 'paid_message') job.highlight_seconds = req.highlight_seconds || 0;

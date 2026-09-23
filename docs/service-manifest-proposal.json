@@ -42,7 +42,8 @@
   ],
   "eventsConsumed": [
     "billing.transaction.settled",
-    "billing.transaction.reversed"
+    "billing.transaction.reversed",
+    "billing.receipt.external"
   ],
   "namespacesOwned": [
     "tips.*"
