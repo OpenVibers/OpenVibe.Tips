@@ -10,6 +10,8 @@
     var goals = {};
     var queue = [];
     var busy = false;
+    var current = null;
+    var retracted = {};
     var shown = {};
     var HIDDEN = { tip: 'sent a tip', paid_message: 'sent a paid message', tts: 'sent a message to read out', media_request: 'requested media' };
 
@@ -33,6 +35,7 @@
         if (busy || !queue.length) return;
         busy = true;
         var a = queue.shift();
+        current = a;
         var s = config.settings || {};
         alertEl.textContent = '';
         var box = el('div', 'box');
@@ -57,8 +60,9 @@
             try { window.speechSynthesis.speak(new SpeechSynthesisUtterance(a.tts.text)); } catch (e) { /* no voice */ }
         }
         setTimeout(function () {
+            if (current !== a) return;   // retracted while on screen: already cleared
             alertEl.className = '';
-            setTimeout(function () { busy = false; next(); }, 400);
+            setTimeout(function () { busy = false; current = null; next(); }, 400);
         }, Number(s.duration_ms) || 8000);
     }
 
@@ -73,7 +77,7 @@
     es.addEventListener('config', function (e) { var d = JSON.parse(e.data); if (d.config) config = d.config; });
     es.addEventListener('alert', function (e) {
         var d = JSON.parse(e.data);
-        if (shown[d.delivery_id]) return;   // a replay of one this page already showed
+        if (shown[d.delivery_id] || retracted[d.interaction_id]) return;   // a replay of one this page already showed, or hidden since
         shown[d.delivery_id] = 1;
         queue.push(d);
         next();
@@ -85,6 +89,18 @@
         goals[g.id] = g;
         renderGoals();
         if (d.test) setTimeout(function () { if (goals[g.id] && goals[g.id]._test) { delete goals[g.id]; renderGoals(); es.close(); location.reload(); } }, 15000);
+    });
+    // A moderator hid it: drop it from the queue, or take it off the screen now (and stop its voice).
+    es.addEventListener('retract', function (e) {
+        var d = JSON.parse(e.data);
+        retracted[d.interaction_id] = 1;
+        queue = queue.filter(function (a) { return a.interaction_id !== d.interaction_id; });
+        if (current && current.interaction_id === d.interaction_id) {
+            try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch (err) { /* no voice */ }
+            alertEl.className = ''; alertEl.textContent = '';
+            current = null;
+            setTimeout(function () { busy = false; next(); }, 400);
+        }
     });
     es.addEventListener('revoked', function () { es.close(); alertEl.textContent = ''; goalsEl.textContent = ''; });
 })();

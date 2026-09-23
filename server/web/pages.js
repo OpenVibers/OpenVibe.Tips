@@ -167,6 +167,7 @@ ${cancelled && i.payment.state === 'pending' ? '<p class="notice">Checkout was c
   <dt>From</dt><dd>${esc(i.supporter_name || 'Someone')}</dd>
   <dt>What</dt><dd>${esc(KIND_LABEL[i.kind])}${i.test ? ' (simulation, not charged, not counted)' : ''}</dd>
   ${privacyLine(i.privacy) ? `<dt>Privacy</dt><dd>${privacyLine(i.privacy)}</dd>` : ''}
+  ${i.moderation && i.moderation.state !== 'visible' ? `<dt>Moderation</dt><dd>${esc(MOD_LABEL[i.moderation.state])} by the creator's moderation; the payment is not affected</dd>` : ''}
   <dt>Amount</dt><dd>${n(i.amount)} Vibes</dd>
   ${i.message ? `<dt>Message</dt><dd>${esc(i.message)}</dd>` : ''}
   ${i.tts ? `<dt>Read out</dt><dd>${esc(i.tts.text)} <small>(${esc(i.tts.voice)})</small></dd>` : ''}
@@ -181,7 +182,7 @@ ${i.payment.state === 'pending' && i.funding === 'checkout' && !i.checkout?.url 
 <p class="fine">The payment state comes from OpenVibe.Billing. Delivery is tracked separately: a delivery problem never undoes a payment.</p>`;
 }
 
-function dashboard({ profile, goals, tokens, configs, totals, recent, deliveries, csrf, idem, flash, error, connected, chatAdapter }) {
+function dashboard({ profile, goals, tokens, configs, totals, recent, deliveries, csrf, idem, flash, error, connected, chatAdapter, mod = {} }) {
     const p = profile;
     const f = (k) => (p[k] ? ' checked' : '');
     const alertCfg = configs.find((c) => c.kind === 'alerts');
@@ -256,6 +257,7 @@ ${flash ? `<p class="notice">${esc(flash)}</p>` : ''}${errorBox(error)}
     <button class="btn ghost" type="submit">Save alert settings</button>
   </form>` : ''}
 </section>
+${moderationCard({ p, csrf, idem, mod })}
 <section class="card"><h2>Test your setup</h2>
   <p>Runs the whole path — overlay alert, goal widget, delivery — marked as a simulation. Nothing is charged and nothing is counted. ${chatAdapter === 'none' ? '' : 'Chat delivery of simulations stays inside Tips.'}</p>
   <form method="post" action="/dashboard/simulate">${hidden({ csrf, idem: `${idem}-s` })}
@@ -273,6 +275,71 @@ ${flash ? `<p class="notice">${esc(flash)}</p>` : ''}${errorBox(error)}
 </section>`;
 }
 
+const MOD_LABEL = { visible: 'Shown', held: 'Held for review', hidden: 'Hidden' };
+const ROLE_LABEL = { filter: 'word filter', creator: 'you', moderator: 'a moderator', service: 'a service' };
+
+/** The dashboard's moderation card: the word filter, moderators and invitations, the latest outcomes. */
+function moderationCard({ p, csrf, idem, mod }) {
+    const fl = p.filter;
+    const moderators = mod.moderators || [];
+    const invites = mod.invites || [];
+    return `<section class="card" id="moderation"><h2>Moderation</h2>
+  <p>${mod.held ? `<b>${n(mod.held)}</b> paid message${mod.held === 1 ? ' is' : 's are'} held for review. ` : ''}<a href="/moderate/${esc(p.handle)}">Review paid messages</a> — hide one from overlays and your pages, or show a held one. Hiding never refunds or uncounts a payment.</p>
+  <form method="post" action="/dashboard/filter">${hidden({ csrf, idem: `${idem}-f` })}
+    <h3>Word filter</h3>
+    <label>Blocked words or phrases, one per line <small>(matched as whole words, any letter case; only you see this list)</small><textarea name="words" rows="4" maxlength="12000">${esc(fl.words.join('\n'))}</textarea></label>
+    <label>When a paid message or a name contains one <select name="action"><option value="mask"${fl.action === 'mask' ? ' selected' : ''}>star the words out (and skip them in text-to-speech)</option><option value="hold"${fl.action === 'hold' ? ' selected' : ''}>hold it until you or a moderator reviews it</option></select></label>
+    <label><input type="checkbox" name="links" value="1"${fl.links ? ' checked' : ''}> Replace links in paid messages with [link]</label>
+    <button class="btn ghost" type="submit">Save the filter</button>
+  </form>
+  <h3>Moderators</h3>
+  ${moderators.length ? `<ul class="plain">${moderators.map((m) => `<li>${esc(m.name || m.moderator.id)} <small>since ${when(m.added_at)}</small> <form class="inline" method="post" action="/dashboard/moderators/${esc(m.moderator.id)}/remove">${hidden({ csrf, idem: `${idem}-m-${m.moderator.id}` })}<button class="btn ghost" type="submit">Remove</button></form></li>`).join('')}</ul>` : '<p>No moderators yet.</p>'}
+  ${invites.length ? `<p class="fine">Open invitations: ${invites.map((x) => `created ${when(x.created_at)}, expires ${when(x.expires_at)} <form class="inline" method="post" action="/dashboard/moderator-invites/${esc(x.id)}/revoke">${hidden({ csrf, idem: `${idem}-ri-${x.id}` })}<button class="btn ghost" type="submit">Revoke</button></form>`).join(' · ')}</p>` : ''}
+  <form method="post" action="/dashboard/moderator-invites">${hidden({ csrf, idem: `${idem}-i` })}<button class="btn ghost" type="submit">Create a moderator invitation link</button></form>
+  ${mod.log && mod.log.length ? `<details><summary>Latest moderation</summary><table class="list"><thead><tr><th>When</th><th>What</th><th>By</th><th>Receipt</th></tr></thead><tbody>${mod.log.map((l) => `<tr><td>${when(l.created_at)}</td><td>${esc(l.action)}</td><td>${esc(ROLE_LABEL[l.by_role] || l.by_role)}</td><td><a href="/receipts/${esc(l.interaction_id)}"><code>${esc(l.interaction_id.slice(-8))}</code></a></td></tr>`).join('')}</tbody></table></details>` : ''}
+  ${mod.moderating && mod.moderating.length ? `<p class="fine">You moderate: ${mod.moderating.map((c) => `<a href="/moderate/${esc(c.handle)}">${esc(c.display_name)}</a>`).join(', ')}</p>` : ''}
+</section>`;
+}
+
+/** /moderate/<handle>: paid messages for the creator and their moderators to review. */
+function moderatePage({ profile, rows, state, next, csrf, idem, flash, error, isCreator }) {
+    const tab = (k, label) => `<a href="/moderate/${esc(profile.handle)}?state=${k}"${state === k ? ' aria-current="page"' : ''}>${label}</a>`;
+    const item = (r) => {
+        const what = [r.message && `<p class="msg">${esc(r.message)}</p>`, r.tts_text && `<p class="msg"><small>Read out:</small> ${esc(r.tts_text)}</p>`, r.media_url && `<p class="msg"><small>Media:</small> ${esc(r.media_url)}</p>`].filter(Boolean).join('');
+        const act = r.moderation.state === 'visible' ? 'hide' : 'restore';
+        const btn = r.moderation.state === 'held' ? 'Show it now' : act === 'hide' ? 'Hide' : 'Show again';
+        return `<li class="mod-item ${esc(r.moderation.state)}${r.test ? ' test' : ''}">
+  <div><b>${esc(r.supporter_name)}</b> · ${esc(KIND_LABEL[r.kind])}${r.amount != null ? ` · ${n(r.amount)} Vibes` : ''} · <small>${when(r.created_at)}${r.test ? ' · simulation' : ''}${r.payment_state === 'pending' ? ' · payment pending' : ''}</small>
+    <span class="pill">${esc(MOD_LABEL[r.moderation.state])}${r.moderation.filtered ? ' · filtered' : ''}</span></div>
+  ${what || '<p class="msg"><small>No message.</small></p>'}
+  <form class="inline" method="post" action="/moderate/${esc(profile.handle)}/${esc(r.id)}/${act}">${hidden({ csrf, idem: `${idem}-${r.id}` })}
+    ${act === 'hide' ? '<label>Note <small>(optional, only in your log)</small> <input type="text" name="reason" maxlength="200"></label>' : ''}
+    <button class="btn${act === 'hide' ? ' ghost' : ''}" type="submit">${btn}</button></form>
+</li>`;
+    };
+    return `<h1>Paid messages — ${esc(profile.display_name)}</h1>
+${flash ? `<p class="notice">${esc(flash)}</p>` : ''}${errorBox(error)}
+<p class="fine">${isCreator ? 'You and your moderators' : `You moderate ${esc(profile.display_name)}'s page. You`} can hide a paid message from overlays, chat still to come and the public pages, or show one the word filter held. The payment is never touched. Private messages and hidden amounts stay private here too.</p>
+<nav class="tabs">${tab('held', 'Held')} ${tab('visible', 'Shown')} ${tab('hidden', 'Hidden')} ${tab('all', 'All')}</nav>
+${rows.length ? `<ul class="mod-list">${rows.map(item).join('')}</ul>` : '<p>Nothing here.</p>'}
+${next ? `<p><a href="/moderate/${esc(profile.handle)}?state=${esc(state)}&cursor=${esc(next)}">Older</a></p>` : ''}`;
+}
+
+function invitePage({ profile, csrf, idem, secret, isSelf }) {
+    return `<h1>Moderate ${esc(profile.display_name)}</h1>
+<section class="card">
+  ${isSelf ? '<p>This invitation is for your own page: you moderate it already.</p>' : `<p>${esc(profile.display_name)} invited you to moderate the paid messages on their OpenVibe.Tips page: you will be able to hide a paid message from their overlays and pages, and show one their word filter held. You will not see payments, private messages or hidden amounts.</p>
+  <form method="post" action="/moderate/invite/${esc(secret)}">${hidden({ csrf, idem })}<button class="btn" type="submit">Become a moderator</button></form>`}
+</section>`;
+}
+
+function inviteCreated({ out }) {
+    return `<h1>Moderator invitation</h1>
+<p class="notice">Copy it now: this is the only time it is shown. Whoever opens it signed in becomes one of your moderators, so send it only to them. It works once and expires ${when(out.expires_at)}.</p>
+<p><label>Invitation link<input class="copy" type="text" readonly value="${esc(out.url)}" onclick="this.select()"></label></p>
+<p><a class="btn" href="/dashboard#moderation">Back to the dashboard</a></p>`;
+}
+
 function tokenCreated({ out }) {
     return `<h1>Overlay link created</h1>
 <p class="notice">Copy it now: this is the only time it is shown. Anyone with the link can see your alerts and goals (nothing else), so treat it like a password and revoke it if it leaks.</p>
@@ -284,4 +351,4 @@ function errorPage({ status, title, message }) {
     return `<section class="card"><h1>${esc(title)}</h1><p>${esc(message)}</p><p><a href="/">OpenVibe.Tips home</a></p></section><!-- ${status} -->`;
 }
 
-module.exports = { home, creatorPage, goalsPage, supportersPage, receiptsPage, erasePage, receiptPage, dashboard, tokenCreated, errorPage, tipForm };
+module.exports = { home, creatorPage, goalsPage, supportersPage, receiptsPage, erasePage, receiptPage, dashboard, moderatePage, invitePage, inviteCreated, tokenCreated, errorPage, tipForm };

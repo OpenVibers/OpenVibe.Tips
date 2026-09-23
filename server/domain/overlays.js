@@ -16,14 +16,15 @@
  * re-counts a goal, never emits another event. Simulated (test) rows are flagged and emit nothing.
  *
  * An alert's payload is the interaction's publicView() (privacy.js): an anonymous supporter reads
- * "Anonymous", a hidden amount is null, a private message is absent. refreshInteraction() rewrites
- * the stored payloads when that view changes (an erasure), so a replay or /state never shows the
- * old one.
+ * "Anonymous", a hidden amount is null, a private message is absent, blocked words are starred out.
+ * refreshInteraction() rewrites the stored payloads when that view changes (an erasure), so a replay
+ * or /state never shows the old one. retract() (a moderator hid it) marks the alert hidden — never
+ * sent, replayed or listed again — and tells connected overlays to drop it (`retract` event).
  */
 const crypto = require('crypto');
 const { fail, iso, prefixedId, sha256, json, text } = require('../util');
 const { safeUrl } = require('./profiles');
-const { publicView, publicName } = require('./privacy');
+const { isHidden } = require('./privacy');
 
 const SCOPES = ['alerts', 'goals'];
 const TOKEN_RE = /^tovl_[A-Za-z0-9_-]{43}$/;
@@ -162,7 +163,7 @@ function createOverlays(ctx) {
 
     /** Inside the settlement transaction (or a simulation). */
     function addAlert(interaction) {
-        const payload = publicView(interaction, { at: iso(ctx.now()) });
+        const payload = ctx.view(interaction, { at: iso(ctx.now()) });
         return insertDelivery(interaction.creator_subject, 'alert', { interactionId: interaction.id, payload, test: interaction.test, dedupe: `alert:${interaction.id}` });
     }
 
@@ -171,11 +172,31 @@ function createOverlays(ctx) {
      * the goal updates it caused no longer name anyone.
      */
     function refreshInteraction(interaction) {
+        const view = ctx.view(interaction);
         for (const row of db.prepare('SELECT seq, kind, payload FROM overlay_deliveries WHERE interaction_id = ?').all(interaction.id)) {
             const old = json(row.payload, {});
-            const payload = row.kind === 'alert' ? publicView(interaction, { at: old.at }) : { ...old, by: interaction.hide_amount ? null : publicName(interaction) };
+            const payload = row.kind === 'alert' ? ctx.view(interaction, { at: old.at }) : { ...old, by: interaction.hide_amount || isHidden(interaction) ? null : view.supporter_name };
             db.prepare('UPDATE overlay_deliveries SET payload = ? WHERE seq = ?').run(JSON.stringify(payload), row.seq);
         }
+    }
+
+    /** Inside a transaction: a moderator hid the interaction. Its alert is never sent or replayed again. */
+    function retract(interaction) {
+        db.prepare("UPDATE overlay_deliveries SET hidden = 1 WHERE interaction_id = ? AND kind = 'alert'").run(interaction.id);
+        refreshInteraction(interaction);
+        const rows = db.prepare("SELECT id, seq FROM overlay_deliveries WHERE interaction_id = ? AND kind = 'alert'").all(interaction.id);
+        ctx.afterCommit(() => {
+            for (const c of clients.get(interaction.creator_subject) || []) {
+                if (!c.scopes.includes('alerts')) continue;
+                for (const r of rows) write(c, 'retract', null, { interaction_id: interaction.id, delivery_id: r.id, seq: r.seq });
+            }
+        });
+    }
+
+    /** Inside a transaction: shown again. Back in /state and replays; open overlays are not re-alerted. */
+    function unretract(interaction) {
+        db.prepare("UPDATE overlay_deliveries SET hidden = 0 WHERE interaction_id = ? AND kind = 'alert'").run(interaction.id);
+        refreshInteraction(interaction);
     }
 
     function addGoalDelivery(creator, goalView, { reason, interactionId, by, dedupe, test = false }) {
@@ -198,7 +219,7 @@ function createOverlays(ctx) {
     /** Pending rows older than the window → failed (tips.overlay.failed). Returns how many. */
     function sweepFailed() {
         const cutoff = iso(ctx.now() - ctx.config.overlays.ttlMs);
-        const rows = db.prepare("SELECT * FROM overlay_deliveries WHERE status = 'pending' AND created_at < ? ORDER BY seq LIMIT 500").all(cutoff);
+        const rows = db.prepare("SELECT * FROM overlay_deliveries WHERE status = 'pending' AND hidden = 0 AND created_at < ? ORDER BY seq LIMIT 500").all(cutoff);
         if (!rows.length) return 0;
         ctx.tx(() => {
             for (const row of rows) {
@@ -228,7 +249,7 @@ function createOverlays(ctx) {
 
     function send(client, row) {
         client.lastSeq = Math.max(client.lastSeq, row.seq);
-        if (!client.scopes.includes(scopeOf(row.kind))) return;
+        if (row.hidden || !client.scopes.includes(scopeOf(row.kind))) return;
         const payload = json(row.payload, {});
         if (row.kind === 'alert' && client.minAmount && !row.test) {
             // A hidden amount is not in the payload; the threshold still applies to the real one.
@@ -241,7 +262,7 @@ function createOverlays(ctx) {
     }
 
     function pushNew(client) {
-        const rows = db.prepare("SELECT * FROM overlay_deliveries WHERE creator_subject = ? AND seq > ? AND status != 'failed' ORDER BY seq LIMIT 200").all(client.creator, client.lastSeq);
+        const rows = db.prepare("SELECT * FROM overlay_deliveries WHERE creator_subject = ? AND seq > ? AND status != 'failed' AND hidden = 0 ORDER BY seq LIMIT 200").all(client.creator, client.lastSeq);
         for (const row of rows) send(client, row);
     }
 
@@ -272,13 +293,13 @@ function createOverlays(ctx) {
         const last = Number(lastEventId);
         if (lastEventId != null && Number.isInteger(last) && last >= 0) {
             const limit = ctx.config.overlays.replayLimit;
-            const rows = db.prepare("SELECT * FROM overlay_deliveries WHERE creator_subject = ? AND seq > ? AND status != 'failed' ORDER BY seq DESC LIMIT ?").all(client.creator, last, limit).reverse();
+            const rows = db.prepare("SELECT * FROM overlay_deliveries WHERE creator_subject = ? AND seq > ? AND status != 'failed' AND hidden = 0 ORDER BY seq DESC LIMIT ?").all(client.creator, last, limit).reverse();
             client.lastSeq = rows.length ? rows[0].seq - 1 : maxSeq;
             for (const row of rows) send(client, row);
             client.lastSeq = Math.max(client.lastSeq, maxSeq);
         } else {
             const cutoff = iso(ctx.now() - ctx.config.overlays.ttlMs);
-            const pending = db.prepare("SELECT * FROM overlay_deliveries WHERE creator_subject = ? AND status = 'pending' AND created_at >= ? ORDER BY seq LIMIT 100").all(client.creator, cutoff);
+            const pending = db.prepare("SELECT * FROM overlay_deliveries WHERE creator_subject = ? AND status = 'pending' AND hidden = 0 AND created_at >= ? ORDER BY seq LIMIT 100").all(client.creator, cutoff);
             for (const row of pending) send(client, row);
             client.lastSeq = Math.max(client.lastSeq, maxSeq);
         }
@@ -311,13 +332,13 @@ function createOverlays(ctx) {
     function closeAll() { for (const set of clients.values()) for (const c of [...set]) detach(c); }
 
     function recentDeliveries(creator, limit = 50) {
-        return db.prepare('SELECT seq, id, kind, interaction_id, goal_id, test, status, sends, created_at, delivered_at, failed_at FROM overlay_deliveries WHERE creator_subject = ? ORDER BY seq DESC LIMIT ?').all(creator, limit);
+        return db.prepare('SELECT seq, id, kind, interaction_id, goal_id, test, status, hidden, sends, created_at, delivered_at, failed_at FROM overlay_deliveries WHERE creator_subject = ? ORDER BY seq DESC LIMIT ?').all(creator, limit);
     }
 
     return {
         SCOPES, createToken, getToken, listTokens, authenticate, revokeToken, presentToken,
         getConfig, listConfigs, createConfig, updateConfig, presentConfig,
-        addAlert, refreshInteraction, addGoalDelivery, sweepFailed, attach, detach, closeToken, notify, connected, closeAll, recentDeliveries,
+        addAlert, refreshInteraction, retract, unretract, addGoalDelivery, sweepFailed, attach, detach, closeToken, notify, connected, closeAll, recentDeliveries,
     };
 }
 

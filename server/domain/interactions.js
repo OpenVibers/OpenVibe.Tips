@@ -40,7 +40,7 @@
  */
 const { fail, iso, prefixedId, json, positiveInt, text, userSubject, entityRef, displayName } = require('../util');
 const { VOICES } = require('./profiles');
-const { parsePrivacy, publicName, publicView, privacyOf, isAnonymous } = require('./privacy');
+const { parsePrivacy, publicName, shownName, privacyOf, isAnonymous } = require('./privacy');
 const { BillingCallError } = require('../billing-client');
 
 const KINDS = ['tip', 'paid_message', 'tts', 'media_request'];
@@ -247,7 +247,9 @@ function createInteractions(ctx) {
         const at = iso(ctx.now());
         const test = !!i.test;
         const req = json(i.request, {});
-        db.prepare("UPDATE tip_interactions SET payment_state = 'settled', delivery_state = 'queued', settled_at = ?, updated_at = ? WHERE id = ?").run(at, at, i.id);
+        // A tip hidden by a moderator while its payment was pending will deliver nothing.
+        db.prepare(`UPDATE tip_interactions SET payment_state = 'settled', delivery_state = CASE WHEN moderation = 'hidden' THEN 'cancelled' ELSE 'queued' END,
+                settled_at = ?, updated_at = ? WHERE id = ?`).run(at, at, i.id);
         i = get(i.id);
 
         if (i.kind === 'paid_message' || i.kind === 'tts') {
@@ -259,12 +261,31 @@ function createInteractions(ctx) {
             db.prepare(`INSERT OR IGNORE INTO paid_media_requests (id, interaction_id, creator_subject, url, provider, status, test, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?)`).run(prefixedId('tmr', ctx.now()), i.id, i.creator_subject, req.media.url, req.media.provider, test ? 1 : 0, at, at);
         }
+        // The creator's word filter runs before anything is shown, posted or read (moderation.js): a
+        // match is masked, or held for review when the creator chose that. History is not screened.
+        const verdict = i.origin !== 'import' && i.moderation === 'visible' ? ctx.moderation.screen(i) : { hit: false };
+        if (verdict.hit) ctx.moderation.markScreened(i, verdict);
+        i = get(i.id);
         if (!test && i.origin !== 'import') ctx.goals.contribute(i, req.goal_id);
-
-        if (i.origin !== 'import') {
-            ctx.overlays.addAlert(i);
-            addEffect(i, 'overlay_alert', 'overlay', 'delivered');
+        if (i.origin !== 'import' && i.moderation === 'visible') release(i);
+        recomputeDelivery(i.id);
+        if (!test && i.origin !== 'import') {
+            ctx.outbox.emit('tips.interaction.ready', { type: 'interaction', id: i.id }, summary(get(i.id)));
         }
+        if (verdict.hit) ctx.moderation.recordScreened(get(i.id), verdict);
+        ctx.afterCommit(() => { ctx.effects.kick(); ctx.outboxKick(); });
+        return get(i.id);
+    }
+
+    /**
+     * Inside a transaction: show a settled interaction — the overlay alert and the chat, TTS and media
+     * deliveries. Settlement calls it, and moderation's restore() for one the filter held. Idempotent:
+     * nothing that exists (delivered or cancelled) is created again.
+     */
+    function release(i) {
+        const test = !!i.test;
+        ctx.overlays.addAlert(i);
+        addEffect(i, 'overlay_alert', 'overlay', 'delivered');
         // Chat effects: never for imports (history), never twice for a donation another product already
         // announced (origin billing), never to a real chat room for a simulation.
         const adapter = test ? 'test' : config.chat.adapter;
@@ -275,11 +296,7 @@ function createInteractions(ctx) {
             if (i.kind === 'media_request') addEffect(i, 'media_request', adapter);
         }
         recomputeDelivery(i.id);
-        if (!test && i.origin !== 'import') {
-            ctx.outbox.emit('tips.interaction.ready', { type: 'interaction', id: i.id }, summary(get(i.id)));
-        }
-        ctx.afterCommit(() => { ctx.effects.kick(); ctx.outboxKick(); });
-        return get(i.id);
+        ctx.afterCommit(() => ctx.effects.kick());
     }
 
     function addEffect(i, effect, adapter, state = 'queued') {
@@ -362,7 +379,16 @@ function createInteractions(ctx) {
             .run(JSON.stringify(ids), take, at, at, i.id);
         if (take > 0 && !i.test) ctx.goals.reverse(i, take);
         // Undelivered effects are cancelled; a delivery that already happened stays on record.
-        const cancelled = cancelQueued(get(i.id), 'payment_reversed');
+        let cancelled = cancelQueued(get(i.id), 'payment_reversed');
+        const now = get(i.id);
+        if (!cancelled && now.moderation === 'held' && now.delivery_state === 'queued') {
+            // Held by the filter and never shown: it will not be released now.
+            db.prepare("UPDATE tip_interactions SET delivery_state = 'cancelled', updated_at = ? WHERE id = ?").run(at, i.id);
+            db.prepare("UPDATE paid_messages SET status = 'cancelled', updated_at = ? WHERE interaction_id = ? AND status = 'queued'").run(at, i.id);
+            db.prepare("UPDATE paid_media_requests SET status = 'cancelled', updated_at = ? WHERE interaction_id = ? AND status = 'queued'").run(at, i.id);
+            if (!now.test) ctx.outbox.emit('tips.interaction.cancelled', { type: 'interaction', id: i.id }, { ...summary(get(i.id)), reason: 'payment_reversed' });
+            cancelled = true;
+        }
         return cancelled ? 'reversed_cancelled' : 'reversed';
     }
 
@@ -383,6 +409,7 @@ function createInteractions(ctx) {
         const i = get(id);
         if (!i || i.delivery_state === 'cancelled' || i.delivery_state === 'awaiting_payment') return i;
         const effects = db.prepare('SELECT state FROM interaction_effects WHERE interaction_id = ?').all(id).map((e) => e.state);
+        if (i.moderation === 'held' && !effects.length) return i;   // waiting for a moderator: still to deliver
         let next = 'queued';
         if (effects.includes('failed') && !effects.includes('queued')) next = 'failed';
         else if (!effects.includes('queued')) next = 'delivered';
@@ -490,7 +517,8 @@ function createInteractions(ctx) {
             if (g) {
                 const view = ctx.goals.present(g);
                 const would = { ...view, current_amount: view.current_amount + v.amount, percent: Math.min(100, Math.floor(((view.current_amount + v.amount) * 100) / view.target_amount)) };
-                ctx.overlays.addGoalDelivery(profile.creator_subject, would, { reason: 'simulation', interactionId: i.id, by: i.hide_amount ? null : publicName(i), dedupe: `goal:${g.id}:sim:${i.id}`, test: true });
+                const shown = get(i.id);
+                ctx.overlays.addGoalDelivery(profile.creator_subject, would, { reason: 'simulation', interactionId: i.id, by: shown.hide_amount || shown.moderation !== 'visible' ? null : ctx.view(shown).supporter_name, dedupe: `goal:${g.id}:sim:${i.id}`, test: true });
             }
             return out;
         });
@@ -522,7 +550,8 @@ function createInteractions(ctx) {
             supporter_name: named ? (i.supporter_name || null) : publicName(i), kind: i.kind, amount: i.amount, currency: i.currency, message: i.message || null,
             tts: req.tts || null, media: req.media ? { url: req.media.url, provider: req.media.provider } : null, goal_id: req.goal_id || null,
             funding: i.funding, settlement: i.settlement, origin: i.origin, test: !!i.test,
-            privacy: privacyOf(i), public: publicView(i), erased_at: i.erased_at || null,
+            privacy: privacyOf(i), public: ctx.view(i), erased_at: i.erased_at || null,
+            moderation: { state: i.moderation, filtered: !!i.filtered, at: i.moderated_at || null },
             payment: { state: i.payment_state, billing_txn_id: i.billing_txn_id || null, reversal_txn_ids: json(i.reversal_txn_ids, []), reversed_amount: i.reversed_bits, failure: i.failure || null, settled_at: i.settled_at || null, reversed_at: i.reversed_at || null },
             delivery: { state: i.delivery_state, delivered_at: i.delivered_at || null },
             created_at: i.created_at, updated_at: i.updated_at,
@@ -554,7 +583,8 @@ function createInteractions(ctx) {
     // Only settled, non-test interactions of supporters who kept both their name and their amount
     // public count toward the leaderboard (a hidden amount must not be inferable from a rank).
     const leaderboardWhere = (t) => `${t}.creator_subject = @c AND ${t}.supporter_subject IS NOT NULL AND ${t}.test = 0
-        AND ${t}.payment_state IN ('settled', 'reversed') AND ${t}.anonymous = 0 AND ${t}.hide_amount = 0 AND ${t}.erased_at IS NULL`;
+        AND ${t}.payment_state IN ('settled', 'reversed') AND ${t}.anonymous = 0 AND ${t}.hide_amount = 0 AND ${t}.erased_at IS NULL
+        AND ${t}.moderation = 'visible'`;
 
     /** Top supporters: [{ rank, name, total, tips }] (name = the latest name they tipped under). */
     function leaderboard(creator, { limit = 20 } = {}) {
@@ -563,14 +593,15 @@ function createInteractions(ctx) {
                     ORDER BY j.created_at DESC LIMIT 1) AS name
             FROM tip_interactions t WHERE ${leaderboardWhere('t')}
             GROUP BY t.supporter_subject HAVING total > 0 ORDER BY total DESC, first_at LIMIT @n`).all({ c: creator, n: Math.min(100, Math.max(1, limit)) });
-        return rows.map((r, k) => ({ rank: k + 1, name: r.name || 'Someone', total: r.total, tips: r.tips }));
+        const settings = ctx.profiles.filterOf(creator);
+        return rows.map((r, k) => ({ rank: k + 1, name: shownName({ supporter_name: r.name }, settings), total: r.total, tips: r.tips }));
     }
 
     /** Recent settled interactions with a public message, as publicView(). */
     function recentPublic(creator, { limit = 20 } = {}) {
         return db.prepare(`SELECT * FROM tip_interactions WHERE creator_subject = ? AND test = 0 AND payment_state = 'settled' AND private_message = 0
-                AND erased_at IS NULL AND message IS NOT NULL ORDER BY settled_at DESC, id DESC LIMIT ?`).all(creator, Math.min(100, Math.max(1, limit)))
-            .map((i) => publicView(i));
+                AND erased_at IS NULL AND moderation = 'visible' AND message IS NOT NULL ORDER BY settled_at DESC, id DESC LIMIT ?`).all(creator, Math.min(100, Math.max(1, limit)))
+            .map((i) => ctx.view(i));
     }
 
     // ── A supporter's own data ───────────────────────────────
@@ -664,7 +695,7 @@ function createInteractions(ctx) {
     return {
         get, byBillingTxn, validate, request, transfer, startCheckout, processDueTransfers, settleByTransaction, settle, failPayment,
         onBillingSettled, onBillingReversed, onBillingExternal, cancelQueued, recomputeDelivery, recordExternal, simulate, summary, present, list, totals, insert, KINDS,
-        leaderboard, recentPublic, exportFor, erase,
+        leaderboard, recentPublic, exportFor, erase, release,
     };
 }
 

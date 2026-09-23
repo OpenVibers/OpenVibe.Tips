@@ -15,13 +15,18 @@
  *   supporters_page      openvibe.tips/<handle>/supporters: the top supporters
  *   supporters_amounts   each top supporter's total, and amounts in the recent list
  *   supporters_messages  recent public messages on the supporters page
+ *
+ * filter_words / filter_action / filter_links are the creator's word filter for paid messages
+ * (filter.js; `filter` in the API): filterOf(subject) is what every public view applies.
  */
 const { fail, iso, text, json } = require('../util');
+const filterLib = require('./filter');
 
 const HANDLE_RE = /^[a-z0-9][a-z0-9_.-]{0,39}$/;
 // Paths the site itself uses; no creator page can take them.
 const RESERVED = new Set(['api', 'auth', 'overlay', 'internal', 'dashboard', 'receipts', 'assets', 'css', 'js', 'img', 'favicon.svg',
-    'robots.txt', 'sitemap.xml', 'release.json', 'manifest.webmanifest', 'terms', 'privacy', 'dmca', 'tos', 'about', 'help', 'goals', 'tips', 'admin', 'www']);
+    'robots.txt', 'sitemap.xml', 'release.json', 'manifest.webmanifest', 'terms', 'privacy', 'dmca', 'tos', 'about', 'help', 'goals', 'tips', 'admin', 'www',
+    'moderate', 'supporters', 'metrics']);
 const VOICES = ['gary', 'brian', 'amy', 'emma', 'joey', 'justin', 'matthew', 'salli', 'kimberly', 'kendra', 'ivy', 'joanna'];
 
 function normalizeHandle(v) {
@@ -41,7 +46,11 @@ function pageSettings(raw) {
 function parse(row) {
     if (!row) return null;
     const b = (k) => !!row[k];
-    return { ...row, page_enabled: b('page_enabled'), accepting: b('accepting'), tts_enabled: b('tts_enabled'), media_requests_enabled: b('media_requests_enabled'), page: pageSettings(row.page_settings) };
+    return {
+        ...row, page_enabled: b('page_enabled'), accepting: b('accepting'), tts_enabled: b('tts_enabled'), media_requests_enabled: b('media_requests_enabled'),
+        page: pageSettings(row.page_settings),
+        filter: { words: json(row.filter_words, []), action: filterLib.ACTIONS.includes(row.filter_action) ? row.filter_action : 'mask', links: row.filter_links !== 0 },
+    };
 }
 
 function createProfiles(ctx) {
@@ -114,6 +123,18 @@ function createProfiles(ctx) {
             for (const k of Object.keys(PAGE_DEFAULTS)) if (patch.page[k] !== undefined) next[k] = patch.page[k] === true || patch.page[k] === 'on' || patch.page[k] === '1' || patch.page[k] === 1;
             set.page_settings = JSON.stringify(next);
         }
+        if (patch.filter !== undefined) {
+            const f = patch.filter;
+            if (!f || typeof f !== 'object' || Array.isArray(f)) fail(422, 'tips.invalid_input', 'filter must be an object { words, action, links }');
+            const unknown = Object.keys(f).filter((k) => !['words', 'action', 'links'].includes(k));
+            if (unknown.length) fail(422, 'tips.invalid_input', `filter has no setting ${unknown[0]}`);
+            if (f.words !== undefined) set.filter_words = JSON.stringify(filterLib.normalizeWords(f.words));
+            if (f.action !== undefined) {
+                if (!filterLib.ACTIONS.includes(f.action)) fail(422, 'tips.invalid_input', `filter.action must be one of ${filterLib.ACTIONS.join(', ')}`);
+                set.filter_action = f.action;
+            }
+            if (f.links !== undefined) set.filter_links = f.links === true || f.links === 'on' || f.links === '1' || f.links === 1 ? 1 : 0;
+        }
         if (patch.display_name !== undefined) {
             const n = text(patch.display_name, 'display_name', 80);
             if (!n) fail(422, 'tips.invalid_input', 'display_name cannot be empty');
@@ -139,11 +160,18 @@ function createProfiles(ctx) {
             supporters_url: p.page.supporters_page ? `${ctx.config.baseUrl}/${p.handle}/supporters` : null,
             currency: 'vibes-bits',
         };
-        if (owner) Object.assign(out, { revision: p.revision, created_at: p.created_at, updated_at: p.updated_at });
+        if (owner) Object.assign(out, { filter: p.filter, revision: p.revision, created_at: p.created_at, updated_at: p.updated_at });
         return out;
     }
 
-    return { bySubject, byHandle, resolve, ensure, update, present, normalizeHandle };
+    /** The creator's filter settings for publicView() (null when they have no profile). */
+    function filterOf(subject) {
+        const row = db.prepare('SELECT filter_words, filter_action, filter_links FROM creator_tip_profiles WHERE creator_subject = ?').get(subject);
+        if (!row) return null;
+        return { words: json(row.filter_words, []), action: row.filter_action === 'hold' ? 'hold' : 'mask', links: row.filter_links !== 0 };
+    }
+
+    return { bySubject, byHandle, resolve, ensure, update, present, normalizeHandle, filterOf };
 }
 
 function safeUrl(u) {

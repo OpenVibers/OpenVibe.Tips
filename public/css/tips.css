@@ -69,3 +69,11 @@ ul.wall { list-style: none; padding: 0; }
 ul.wall li { border-bottom: 1px solid var(--tips-border); padding: 8px 0; }
 ul.wall p { margin: 4px 0; overflow-wrap: anywhere; }
 @media (max-width: 560px) { dl.receipt { grid-template-columns: 1fr; } .creator-head { flex-direction: column; align-items: flex-start; } table.list { font-size: .85rem; } }
+.pill { display: inline-block; font-size: .8rem; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--tips-border); color: var(--tips-muted); margin-left: 6px; }
+nav.tabs { display: flex; gap: 14px; margin: 12px 0; }
+nav.tabs a[aria-current] { font-weight: 700; text-decoration: none; color: var(--tips-text); }
+ul.mod-list, ul.plain { list-style: none; padding: 0; }
+.mod-item { border-bottom: 1px solid var(--tips-border); padding: 10px 0; }
+.mod-item.hidden .msg, .mod-item.test { color: var(--tips-muted); }
+.mod-item.held { border-left: 3px solid var(--tips-bad); padding-left: 10px; }
+.mod-item .msg { margin: 6px 0; overflow-wrap: anywhere; }

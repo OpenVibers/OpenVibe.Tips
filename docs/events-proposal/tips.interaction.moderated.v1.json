@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openvibe.network/contracts/events/payloads/tips.interaction.moderated.v1.json",
+  "title": "TipsInteractionModeratedPayload",
+  "description": "tips.interaction.moderated v1 (OpenVibe.Tips server/domain/moderation.js record). A moderation outcome for a paid message (and the name that came with it): the creator's word filter starred words out at settlement (filtered) or held it for review before anything was shown (held); the creator, one of their moderators or a service hid it (hidden: queued chat, TTS and media deliveries were cancelled, the overlay alert retracted, public pages leave it out) or showed it again (restored; a held one is released then). The money is never touched: no refund, the goal and totals keep it. Envelope: subject { type: interaction, id: tint_… }, visibility internal, priority important, actor service:tips. Carries no supporter, message, reason text or moderator identity (Tips keeps those in its own moderation log). Never emitted for simulations.",
+  "type": "object",
+  "required": ["interaction_id", "creator", "action", "by", "moderation_state", "cancelled_effects"],
+  "additionalProperties": false,
+  "properties": {
+    "interaction_id": { "type": "string", "pattern": "^tint_[0-9A-HJKMNP-TV-Z]{26}$" },
+    "creator": { "$ref": "../../identity/subject-ref.v1.json" },
+    "action": { "enum": ["filtered", "held", "hidden", "restored"] },
+    "by": { "enum": ["filter", "creator", "moderator", "service"], "description": "Who acted, by role." },
+    "moderation_state": { "enum": ["visible", "held", "hidden"], "description": "The interaction's moderation state after this outcome." },
+    "cancelled_effects": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "enum": ["chat_line", "paid_message", "tts", "media_request"] },
+      "description": "Deliveries this outcome cancelled before they happened (hidden only; empty otherwise). A consumer that queued the same paid message itself should drop it."
+    }
+  }
+}

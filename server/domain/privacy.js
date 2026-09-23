@@ -20,9 +20,13 @@
  * An interaction the supporter erased (erased_at) reads like an anonymous one with no message.
  *
  * publicView() is the only shape that leaves Tips for the public: overlay alerts, chat jobs, the
- * supporters and goals pages, and the `public` block of API answers.
+ * supporters and goals pages, and the `public` block of API answers. It also applies moderation
+ * (moderation.js): a held or hidden interaction shows nothing but that it is hidden, and the creator's
+ * word filter (filter.js) stars blocked words out of the name and message and drops them from what
+ * text-to-speech reads.
  */
 const { fail, json } = require('../util');
+const filter = require('./filter');
 
 const ANONYMOUS = 'Anonymous';
 const FLAGS = ['anonymous', 'hide_amount', 'private_message'];
@@ -50,27 +54,42 @@ function publicName(i) {
     return i.supporter_name || 'Someone';
 }
 
+const isHidden = (i) => !!i.moderation && i.moderation !== 'visible';
+
+/** The name as the public sees it, through the creator's filter (`settings` from profiles.filterOf). */
+function shownName(i, settings) {
+    if (isAnonymous(i)) return ANONYMOUS;
+    return filter.apply(i.supporter_name || 'Someone', settings).text;
+}
+
 /**
  * The public shape of an interaction. `at` is kept from an earlier overlay payload when given, so a
- * rewritten alert keeps its time.
+ * rewritten alert keeps its time; `filter` is the creator's filter settings.
  */
-function publicView(i, { at } = {}) {
+function publicView(i, { at, filter: settings = null } = {}) {
     const req = json(i.request, {});
     const privateMsg = !!i.private_message || !!i.erased_at;
-    return {
+    const base = {
         interaction_id: i.id,
         kind: i.kind,
         amount: i.hide_amount ? null : i.amount,
         amount_hidden: !!i.hide_amount,
         currency: i.currency,
-        supporter_name: publicName(i),
-        message: privateMsg ? null : (i.message || null),
-        tts: i.kind === 'tts' && req.tts && !i.erased_at ? { text: req.tts.text, voice: req.tts.voice } : null,
-        media: i.kind === 'media_request' && req.media && !i.erased_at ? { url: req.media.url } : null,
         settlement: i.settlement,
         test: !!i.test,
         at: at || i.settled_at || i.created_at,
     };
+    if (isHidden(i)) return { ...base, amount: null, supporter_name: null, message: null, tts: null, media: null, hidden: true };
+    const message = privateMsg || !i.message ? null : filter.apply(i.message, settings).text;
+    const tts = i.kind === 'tts' && req.tts && !i.erased_at ? { text: filter.apply(req.tts.text, settings, 'speech').text, voice: req.tts.voice } : null;
+    return {
+        ...base,
+        supporter_name: shownName(i, settings),
+        message,
+        tts,
+        media: i.kind === 'media_request' && req.media && !i.erased_at ? { url: req.media.url } : null,
+        hidden: false,
+    };
 }
 
-module.exports = { ANONYMOUS, FLAGS, parsePrivacy, publicName, publicView, privacyOf, isAnonymous, truthy };
+module.exports = { ANONYMOUS, FLAGS, parsePrivacy, publicName, shownName, publicView, privacyOf, isAnonymous, isHidden, truthy };

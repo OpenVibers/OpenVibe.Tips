@@ -121,12 +121,18 @@ token as a Bearer and act on their own things only. The API never reads cookies.
 | `GET /goals?creator=`, `GET /goals/:id` | `tips.goal.update` (private; full view) | public shape when the page is on (the creator's page settings); owner sees contributions |
 | `GET /profiles/:creator/supporters` | `tips.profile.get` (while not public) | public when the creator shows the supporters page; the owner |
 | `GET /me/export`, `POST /me/erase` | — (people only) | the supporter's own tips: download; erase their data from them |
+| `GET /moderation?creator=&state=held\|hidden\|visible\|all` | `tips.interaction.moderate` (proposed) | the creator and their moderators |
+| `POST /interactions/:id/hide`, `POST /interactions/:id/restore` `{reason?}` | `tips.interaction.moderate` (proposed) | the creator and their moderators |
+| `GET /moderation/log?creator=` | `tips.interaction.moderate` (proposed) | owner |
+| `GET\|POST /moderators`, `POST /moderators/:subject/remove` | `tips.profile.update` | owner |
 | `POST /goals`, `PATCH /goals/:id`, `POST /goals/:id/close` | `tips.goal.create` / `.update` / `.close` | owner |
 | `GET\|POST /overlay-tokens`, `POST /overlay-tokens/:id/revoke` | `tips.overlay.token.create` / `.revoke` | owner |
 | `GET /overlay-configs[/:id]`, `POST /overlay-configs`, `PATCH /overlay-configs/:id` | `tips.overlay.config.get` / `.update` | owner |
 | `POST /simulate` | `tips.simulation.run` | owner |
 | `POST /internal/events` | Events webhook signature (`TIPS_EVENTS_SECRET`), loopback only | — |
 
+`tips.interaction.moderate` is proposed in [docs/capabilities-proposal/](docs/capabilities-proposal/) and
+not in openvibe-contracts yet (grants are matched by string, so a Network grant of it works today).
 The capabilities and the service manifest were released in openvibe-contracts v0.15.0 (3-segment ids:
 the charter's `tips.simulate` is `tips.simulation.run`; `tips.interaction.record` is new, for EXTERNAL
 tips); the drafts stay in [docs/capabilities-proposal/](docs/capabilities-proposal/) and
@@ -167,15 +173,42 @@ Tips still waiting for their payment are kept until it settles or fails. Each er
 `tips.interaction.erased`, whose `redacts` has OpenVibe.Events tombstone Tips' earlier events about it.
 Stored API answers (Idempotency-Key replays) are pruned after a week.
 
+## Moderation
+
+[server/domain/moderation.js](server/domain/moderation.js), [server/domain/filter.js](server/domain/filter.js).
+The money is never touched: hiding a paid message does not refund it, and a hidden tip still counts
+toward its goal and the creator's totals.
+
+- **Word filter** (`filter: { words, action, links }` on the profile, the dashboard's *Moderation* card;
+  the list is the creator's only). Blocked words or phrases match whole, in any letter case, after
+  Unicode NFKC folding and with invisible and direction-override characters removed, in the name and in
+  what is shown or read. `mask` (default) stars them out of overlays, chat lines and pages and leaves
+  them out of what text-to-speech reads; `hold` holds a paid message that matches before anything is
+  shown, posted or read, until the creator or a moderator shows it (then it is released as settlement
+  would have released it, still masked). Links in paid messages read `[link]` unless the creator turns
+  that off.
+- **Hide / show.** The creator, their moderators and services with `tips.interaction.moderate` hide a
+  paid message: its queued chat, TTS and media deliveries are cancelled (never delivered), its overlay
+  alert is retracted (connected overlays get a `retract` event and drop it, replays and `/state` skip
+  it) and public pages leave it out. Showing it again puts it back on pages and in overlay state; what
+  the hide cancelled stays cancelled. `/moderate/<handle>` is the review page (held, shown, hidden).
+- **Moderators** are added by the creator: a show-once invitation link from the dashboard (hashed at rest,
+  single use, 7 days, never in nginx's log), accepted signed in; or `POST /moderators` by the creator or
+  a service. Moderators see what was written but never private messages, hidden amounts or payments.
+- Every outcome is in `tip_moderation_log` (with the moderator and their note) and is published as
+  `tips.interaction.moderated` (below), which carries no supporter, message, note or moderator.
+
 ## Events
 
 Produced through the openvibe-sdk outbox (table `event_outbox`, source `tips`, same transaction as the
 change; relayed when `EVENTS_URL` and the client secret are set): `tips.interaction.ready`,
 `tips.interaction.failed`, `tips.interaction.cancelled`, `tips.goal.updated`, `tips.overlay.delivered`,
-`tips.overlay.failed`, and `tips.interaction.erased` (a supporter's erasure; payload
-`{ interaction_id, creator, erased_at, redacts }`, schema proposed in
-[docs/events-proposal/](docs/events-proposal/) — not yet in openvibe-contracts). Simulations and Billing
-test money produce none. An anonymous supporter is never named in an event. Consumed:
+`tips.overlay.failed`, and two whose schemas are proposed in [docs/events-proposal/](docs/events-proposal/)
+(not yet in openvibe-contracts): `tips.interaction.erased` (a supporter's erasure; `{ interaction_id,
+creator, erased_at, redacts }`) and `tips.interaction.moderated` (`{ interaction_id, creator, action:
+filtered|held|hidden|restored, by: filter|creator|moderator|service, moderation_state, cancelled_effects }`).
+Simulations and Billing test money produce none. An anonymous supporter is never named in an event.
+Consumed:
 `billing.transaction.settled`, `billing.transaction.reversed`, `billing.receipt.external` (only from source
 `billing`). `billing.receipt.external` (payload: `streamer` SubjectRef, `amount_cents`, `value_bits`,
 `donor_name` — null when `anonymous` — `message`, `provider`, `provider_event_id`, `app_purpose`/`app_ref`,
@@ -187,7 +220,8 @@ id mapped by the Live import; otherwise Live's rule (the only active goal).
 ## Overlays
 
 `GET /overlay/<token>` is an OBS Browser Source page; `/overlay/<token>/events` is the SSE stream
-(`hello` with config and active goals, then `alert` and `goal`, `config` on changes, `revoked`), and
+(`hello` with config and active goals, then `alert` and `goal`, `config` on changes, `retract` when a
+moderator hides an alert, `revoked`), and
 `/overlay/<token>/state` a read-only JSON for other overlay clients (e.g. Live). Tokens are scoped
 (`alerts`, `goals`), shown once, stored as SHA-256, revocable (open streams close at once) and never a
 cookie. Every alert and goal change is one `overlay_deliveries` row with a monotonic `seq` (the SSE id):
@@ -217,7 +251,8 @@ no chat effects, and it is what production runs. When OpenVibe.Chat publishes a 
 `/` · `/<handle>` (goals + tip form posting to checkout; `index,follow` only when the creator switched the
 page on, otherwise 404 for everyone else and a `noindex` preview for the creator) · `/<handle>/goals` ·
 `/<handle>/supporters` (when the creator shows it) · `/receipts`, `/receipts/:id` (payment and delivery
-shown separately, with the privacy chosen), `/receipts/export`, `/receipts/erase` · `/dashboard` (page settings, public pages,
+shown separately, with the privacy chosen), `/receipts/export`, `/receipts/erase` · `/moderate/<handle>`
+(the creator and their moderators), `/moderate/invite/<secret>` · `/dashboard` (page settings, public pages, moderation,
 goals, overlay links shown once, alert settings, simulation, totals, recent tips, overlay deliveries) ·
 `/robots.txt`, `/sitemap.xml` (switched-on pages only) · `/release.json` · `/terms`, `/privacy`, `/dmca`.
 Signed-in forms carry an HMAC anti-forgery token and a per-render nonce. Shared chrome: Network
@@ -249,6 +284,7 @@ a copy of Billing's database for the links and totals:
 | creator totals reconcile exactly to Billing | `test/import.test.js` (fixtures in Live's schema and Billing's importer keys; a Billing donation Tips never saw is reported, then reconciles once its event arrives); `test/api.test.js` (totals = the stub Billing payable) |
 | simulation never counted; token revocation immediate; goals from settled only; reversal keeps the delivery record | `test/overlays.test.js`, `test/api.test.js`, `test/settlement.test.js` |
 | an EXTERNAL PowerChat tip Billing announced is celebrated once: Live chat line, overlay, goal; never Billing money | `test/external.test.js` (redelivery and republish, same key as `POST /interactions/external`, Tips and Live goal ids, anonymous, test receipts, malformed payloads) |
+| paid messages are filtered before they are shown or read; the creator and their moderators hide and show them without touching the money | `test/moderation.test.js` (mask, hold and release, invisible/full-width evasion, TTS text, invitation links, hide cancels queued chat/TTS and retracts the overlay live/replay/state, restore, pending payments, who may moderate, event payloads) |
 | a supporter's privacy holds everywhere; the creator chooses what public pages show; export and erasure keep the books reconciled | `test/privacy.test.js` (anonymous / hidden amount / private message across API, overlays, chat jobs, pages and events; goal and supporters page settings; export; erasure scrubs rows, overlay payloads, stored answers and unsent events, emits `tips.interaction.erased`, totals still equal Billing) |
 
 ## What waits

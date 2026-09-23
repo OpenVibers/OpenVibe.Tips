@@ -18,7 +18,7 @@
  */
 const { fail, iso, prefixedId, text, positiveInt } = require('../util');
 const { safeUrl } = require('./profiles');
-const { publicName } = require('./privacy');
+const { publicName, shownName } = require('./privacy');
 
 function createGoals(ctx) {
     const { db } = ctx;
@@ -64,10 +64,12 @@ function createGoals(ctx) {
         if (!out) return null;
         if (!page.goal_amounts) Object.assign(out, { target_amount: null, current_amount: null, carried_over_amount: null, amounts_hidden: true });
         if (page.goal_supporters) {
+            // Moderated (held or hidden) interactions are left out; names go through the creator's filter.
+            const settings = ctx.profiles.filterOf(g.creator_subject);
             out.supporters = db.prepare(`SELECT c.amount - c.reversed_amount AS amount, c.created_at, i.supporter_name, i.anonymous, i.hide_amount, i.erased_at
                 FROM tip_goal_contributions c JOIN tip_interactions i ON i.id = c.interaction_id WHERE c.goal_id = ? AND c.amount > c.reversed_amount
-                ORDER BY c.id DESC LIMIT 10`).all(g.id)
-                .map((c) => ({ name: publicName(c), amount: page.goal_amounts && !c.hide_amount ? c.amount : null, at: c.created_at }));
+                AND i.moderation = 'visible' ORDER BY c.id DESC LIMIT 10`).all(g.id)
+                .map((c) => ({ name: shownName(c, settings), amount: page.goal_amounts && !c.hide_amount ? c.amount : null, at: c.created_at }));
         }
         return out;
     }
@@ -169,8 +171,9 @@ function createGoals(ctx) {
         if (!r.changes) return null;
         const reachedNow = markReached(g.id);
         // The overlay's goal update names the supporter as the alert does; not when the amount is hidden
-        // (the bar's jump would otherwise pin the amount on them).
-        return changed(g.id, reachedNow ? 'reached' : 'contribution', { interactionId: interaction.id, by: interaction.hide_amount ? null : publicName(interaction) });
+        // (the bar's jump would otherwise pin the amount on them), nor while moderation holds it.
+        const by = interaction.hide_amount || (interaction.moderation && interaction.moderation !== 'visible') ? null : ctx.view(interaction).supporter_name;
+        return changed(g.id, reachedNow ? 'reached' : 'contribution', { interactionId: interaction.id, by });
     }
 
     /** Inside the reversal transaction: take `bits` back off every goal the interaction counted toward. */

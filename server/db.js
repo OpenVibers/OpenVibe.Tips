@@ -247,6 +247,43 @@ CREATE TABLE IF NOT EXISTS import_runs (
     report      TEXT
 );
 
+-- Moderation (server/domain/moderation.js): the creator's moderators, invitations to become one
+-- (show-once links, hashed like overlay tokens) and the record of every moderation outcome.
+CREATE TABLE IF NOT EXISTS tip_moderators (
+    creator_subject   TEXT NOT NULL,
+    moderator_subject TEXT NOT NULL,
+    name              TEXT,                                 -- display name when they joined (for the creator's list)
+    added_by          TEXT NOT NULL,                        -- the creator, a service, or 'invite:<id>'
+    created_at        TEXT NOT NULL,
+    removed_at        TEXT,
+    PRIMARY KEY (creator_subject, moderator_subject)
+);
+CREATE INDEX IF NOT EXISTS idx_tmod_moderator ON tip_moderators (moderator_subject);
+
+CREATE TABLE IF NOT EXISTS tip_moderator_invites (
+    id              TEXT PRIMARY KEY,                       -- tmin_<ULID>
+    creator_subject TEXT NOT NULL,
+    token_hash      TEXT NOT NULL UNIQUE,                   -- sha256 of the link's secret (shown once)
+    created_by      TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    expires_at      TEXT NOT NULL,
+    used_at         TEXT,
+    used_by         TEXT,
+    revoked_at      TEXT
+);
+
+CREATE TABLE IF NOT EXISTS tip_moderation_log (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    creator_subject TEXT NOT NULL,
+    interaction_id  TEXT NOT NULL,
+    action          TEXT NOT NULL CHECK (action IN ('held', 'filtered', 'hidden', 'restored')),
+    by_role         TEXT NOT NULL CHECK (by_role IN ('filter', 'creator', 'moderator', 'service')),
+    actor           TEXT,                                   -- usr_… / svc:… ; null for the filter
+    reason          TEXT,
+    created_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tmodlog_creator ON tip_moderation_log (creator_subject, id);
+
 CREATE TABLE IF NOT EXISTS api_idempotency (
     key          TEXT PRIMARY KEY,                          -- <principal>:<Idempotency-Key>
     request_hash TEXT NOT NULL,
@@ -264,6 +301,8 @@ CREATE TABLE IF NOT EXISTS api_idempotency (
  *
  *   v2  privacy: what the supporter lets the public see of an interaction (server/domain/privacy.js),
  *       their erasure, and what the creator's public goal and supporters pages show
+ *   v3  moderation (server/domain/moderation.js): an interaction's moderation state, the creator's
+ *       word filter, overlay alerts retracted by a moderator
  */
 const COLUMNS = [
     ['tip_interactions', 'anonymous', 'INTEGER NOT NULL DEFAULT 0'],          // name shown as "Anonymous" to everyone but the supporter
@@ -271,9 +310,17 @@ const COLUMNS = [
     ['tip_interactions', 'private_message', 'INTEGER NOT NULL DEFAULT 0'],    // a tip's message is for the creator only
     ['tip_interactions', 'erased_at', 'TEXT'],                                // the supporter erased their data from it
     ['creator_tip_profiles', 'page_settings', "TEXT NOT NULL DEFAULT '{}'"],  // JSON: what the public goal / supporters pages show
+    ['tip_interactions', 'moderation', "TEXT NOT NULL DEFAULT 'visible'"],    // visible | held (the filter, awaiting review) | hidden (a moderator)
+    ['tip_interactions', 'moderated_at', 'TEXT'],
+    ['tip_interactions', 'moderated_by', 'TEXT'],                             // 'filter', usr_… or svc:…
+    ['tip_interactions', 'filtered', 'INTEGER NOT NULL DEFAULT 0'],           // the word filter matched it at settlement
+    ['creator_tip_profiles', 'filter_words', "TEXT NOT NULL DEFAULT '[]'"],   // JSON: the creator's blocklist (filter.js)
+    ['creator_tip_profiles', 'filter_action', "TEXT NOT NULL DEFAULT 'mask'"],// mask | hold
+    ['creator_tip_profiles', 'filter_links', 'INTEGER NOT NULL DEFAULT 1'],   // links in paid messages shown as [link]
+    ['overlay_deliveries', 'hidden', 'INTEGER NOT NULL DEFAULT 0'],           // retracted: never sent or replayed again
 ];
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 function addColumns(db) {
     const have = new Map();

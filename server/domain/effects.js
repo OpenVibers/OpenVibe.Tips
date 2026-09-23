@@ -11,10 +11,12 @@
  *
  * A job carries the interaction's public view only (privacy.js): an anonymous supporter is
  * "Anonymous" with no subject, a hidden amount is null and left out of the line, a private message
- * is not sent. `privacy` tells the receiving product what was withheld.
+ * is not sent, and the creator's word filter has starred blocked words out of the line and dropped
+ * them from the TTS text. `privacy` tells the receiving product what was withheld. An effect whose
+ * interaction a moderator hid (or whose effect was cancelled meanwhile) is never delivered.
  */
 const { iso, json } = require('../util');
-const { publicView, privacyOf, isAnonymous } = require('./privacy');
+const { privacyOf, isAnonymous } = require('./privacy');
 
 function createEffects(ctx) {
     const { db, config } = ctx;
@@ -23,7 +25,7 @@ function createEffects(ctx) {
 
     function jobFor(effect, i, profile) {
         const req = json(i.request, {});
-        const pv = publicView(i);
+        const pv = ctx.view(i);
         const name = pv.supporter_name;
         const amount = pv.amount != null ? `${pv.amount.toLocaleString('en-US')} Vibes` : null;
         const msg = pv.message ? `: ${pv.message}` : '';
@@ -80,10 +82,19 @@ function createEffects(ctx) {
     }
 
     async function runOne(effect) {
+        // Re-read: the batch was selected before earlier deliveries awaited; a hide or a reversal may
+        // have cancelled this one since.
+        const current = db.prepare('SELECT state FROM interaction_effects WHERE id = ?').get(effect.id);
+        if (!current || current.state !== 'queued') return 'cancelled';
         const i = ctx.interactions.get(effect.interaction_id);
         if (!i || i.payment_state !== 'settled') {
             // Reversed or failed before its turn: nothing to deliver.
             ctx.tx(() => ctx.interactions.cancelQueued(i, 'payment_not_settled'));
+            return 'cancelled';
+        }
+        if (i.moderation !== 'visible') {
+            // Hidden or held: moderation.js cancels or releases these; never deliver one meanwhile.
+            db.prepare("UPDATE interaction_effects SET state = 'cancelled', last_error = 'hidden by moderation', updated_at = ? WHERE id = ? AND state = 'queued'").run(iso(ctx.now()), effect.id);
             return 'cancelled';
         }
         const adapter = ctx.adapters[effect.adapter];

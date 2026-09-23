@@ -6,12 +6,15 @@
  *   ctx.tx(fn)          run fn in one SQLite transaction; ctx.afterCommit(hook) queues work (overlay
  *                       pushes, worker kicks) that must only happen once the transaction committed
  *   ctx.outbox.emit()   durable event, inside the transaction (openvibe-sdk outbox)
+ *   ctx.view(i)         the interaction's public view (privacy.js) through its creator's word filter
  */
+const { publicView } = require('./privacy');
 const { createProfiles } = require('./profiles');
 const { createGoals } = require('./goals');
 const { createOverlays } = require('./overlays');
 const { createInteractions } = require('./interactions');
 const { createEffects } = require('./effects');
+const { createModeration } = require('./moderation');
 
 function createDomain({ db, config, outbox, billing, adapters, now = () => Date.now(), log = console }) {
     const ctx = { db, config, now, log, outbox, billing, adapters, _after: null };
@@ -29,10 +32,12 @@ function createDomain({ db, config, outbox, billing, adapters, now = () => Date.
     ctx.outboxKick = () => { try { outbox.kick(); } catch { /* relay off */ } };
 
     ctx.profiles = createProfiles(ctx);
+    ctx.view = (i, opts = {}) => publicView(i, { ...opts, filter: ctx.profiles.filterOf(i.creator_subject) });
     ctx.goals = createGoals(ctx);
     ctx.overlays = createOverlays(ctx);
     ctx.interactions = createInteractions(ctx);
     ctx.effects = createEffects(ctx);
+    ctx.moderation = createModeration(ctx);
     return ctx;
 }
 

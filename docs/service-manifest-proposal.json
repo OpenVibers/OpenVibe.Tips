@@ -30,7 +30,8 @@
     "tips.overlay.token.revoke",
     "tips.overlay.config.get",
     "tips.overlay.config.update",
-    "tips.simulation.run"
+    "tips.simulation.run",
+    "tips.interaction.moderate"
   ],
   "eventsProduced": [
     "tips.interaction.ready",
@@ -39,7 +40,8 @@
     "tips.goal.updated",
     "tips.overlay.delivered",
     "tips.overlay.failed",
-    "tips.interaction.erased"
+    "tips.interaction.erased",
+    "tips.interaction.moderated"
   ],
   "eventsConsumed": [
     "billing.transaction.settled",

@@ -12,6 +12,9 @@
  *   GET  /:handle                   creator page: goals + tip form (indexable only when the page is on)
  *   GET  /:handle/goals             goals (as the creator chose to show them)
  *   GET  /:handle/supporters        top supporters and recent public messages, when the creator shows them
+ *   GET  /moderate/:handle          paid messages to review (the creator and their moderators)
+ *   POST /moderate/:handle/:id/hide|restore
+ *   GET|POST /moderate/invite/:token   accept a moderator invitation (show-once link, never logged by nginx)
  *   POST /:handle/tip               the no-JS tip form → Billing (credit or checkout)
  *   GET  /overlay/:token            the overlay page for OBS (token = scoped, revocable, never a cookie)
  *   GET  /overlay/:token/events     SSE: alerts and goal updates (Last-Event-ID resumes/replays)
@@ -26,12 +29,14 @@ const pages = require('./pages');
 const { esc, asset } = require('./layout');
 const { PAGE_DEFAULTS } = require('../domain/profiles');
 
-const FLASH = new Set(['Saved', 'Page settings saved', 'Goal added', 'Goal updated', 'Goal closed', 'Overlay link revoked', 'Alert settings saved', 'Test sent — check your overlay']);
+const FLASH = new Set(['Saved', 'Page settings saved', 'Goal added', 'Goal updated', 'Goal closed', 'Overlay link revoked', 'Alert settings saved', 'Test sent — check your overlay',
+    'Filter saved', 'Moderator removed', 'Invitation revoked']);
+const MOD_FLASH = new Set(['Hidden', 'Shown', 'You are now a moderator']);
 const RECEIPT_FLASH = new Set(['Your data was erased from your tips']);
 
 function createWebRoutes({ domain, config, layout, userAuth }) {
     const r = express.Router();
-    const { profiles, goals, interactions, overlays, db } = domain;
+    const { profiles, goals, interactions, overlays, moderation, db } = domain;
     const withViewer = viewerMiddleware(userAuth);
     const form = express.urlencoded({ extended: false, limit: '32kb' });
     const secret = config.formSecret || crypto.randomBytes(32).toString('hex');
@@ -62,7 +67,7 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
         html(res, pageFor(req, { active: 'home', canonicalPath: '/', body: pages.home({ creators }) }));
     });
     r.get('/robots.txt', (req, res) => res.type('text/plain').set('Cache-Control', 'public, max-age=3600').send(
-        `User-agent: *\nAllow: /\nDisallow: /dashboard\nDisallow: /receipts\nDisallow: /overlay/\nDisallow: /auth/\nDisallow: /api/\nDisallow: /internal/\nSitemap: ${config.baseUrl}/sitemap.xml\n`));
+        `User-agent: *\nAllow: /\nDisallow: /dashboard\nDisallow: /receipts\nDisallow: /overlay/\nDisallow: /moderate/\nDisallow: /auth/\nDisallow: /api/\nDisallow: /internal/\nSitemap: ${config.baseUrl}/sitemap.xml\n`));
     r.get('/sitemap.xml', (req, res) => {
         const rows = db.prepare('SELECT handle, updated_at FROM creator_tip_profiles WHERE page_enabled = 1 ORDER BY handle').all();
         const urls = [`<url><loc>${esc(config.baseUrl)}/</loc></url>`, ...rows.map((p) => `<url><loc>${esc(`${config.baseUrl}/${p.handle}`)}</loc><lastmod>${esc(p.updated_at.slice(0, 10))}</lastmod></url>`)];
@@ -133,6 +138,11 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
                 configs: overlays.listConfigs(p.creator_subject).map(overlays.presentConfig), totals: interactions.totals(p.creator_subject), recent,
                 deliveries: overlays.recentDeliveries(p.creator_subject, 20), csrf: csrfFor(req.viewer.subject), idem: idem(), flash, error,
                 connected: overlays.connected(p.creator_subject), chatAdapter: config.chat.adapter,
+                mod: {
+                    held: db.prepare("SELECT COUNT(*) AS n FROM tip_interactions WHERE creator_subject = ? AND moderation = 'held' AND payment_state = 'settled'").get(p.creator_subject).n,
+                    moderators: moderation.listModerators(p.creator_subject).map(moderation.presentModerator), invites: moderation.openInvites(p.creator_subject),
+                    log: moderation.log(p.creator_subject, 20), moderating: moderation.moderatedBy(req.viewer.subject),
+                },
             }),
         }), status);
     }
@@ -195,6 +205,16 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
         overlays.updateConfig(c, { ...b, show_message: bool(b.show_message), speak_message: bool(b.speak_message), show_amount: bool(b.show_amount) });
         return { done: 'Alert settings saved' };
     });
+    action('/dashboard/filter', (req, p) => {
+        profiles.update(p.creator_subject, { filter: { words: req.body.words || '', action: req.body.action, links: bool(req.body.links) } });
+        return { done: 'Filter saved' };
+    });
+    action('/dashboard/moderators/:subject/remove', (req, p) => { moderation.removeModerator(p.creator_subject, req.params.subject); return { done: 'Moderator removed' }; });
+    action('/dashboard/moderator-invites', (req, p) => {
+        const out = moderation.createInvite(p.creator_subject, { createdBy: req.viewer.subject });
+        return { render: (res) => html(res, pageFor(req, { title: 'Moderator invitation', active: 'dashboard', robots: 'noindex,nofollow', canonicalPath: '/dashboard', body: pages.inviteCreated({ out }) }), 201, { 'Cache-Control': 'no-store' }) };
+    });
+    action('/dashboard/moderator-invites/:id/revoke', (req, p) => { moderation.revokeInvite(p.creator_subject, req.params.id); return { done: 'Invitation revoked' }; });
     action('/dashboard/simulate', (req, p) => {
         const b = req.body;
         interactions.simulate(p, {
@@ -238,10 +258,82 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
         const out = { creator: { type: 'user', id: t.creator_subject }, scopes: t.scopes };
         if (t.scopes.includes('goals')) out.goals = goals.list(t.creator_subject, { status: 'active' }).map((g) => goals.present(g));
         if (t.scopes.includes('alerts')) {
-            out.alerts = db.prepare("SELECT seq, payload, test, created_at FROM overlay_deliveries WHERE creator_subject = ? AND kind = 'alert' ORDER BY seq DESC LIMIT 20")
+            out.alerts = db.prepare("SELECT seq, payload, test, created_at FROM overlay_deliveries WHERE creator_subject = ? AND kind = 'alert' AND hidden = 0 ORDER BY seq DESC LIMIT 20")
                 .all(t.creator_subject).map((d) => ({ seq: d.seq, ...parseJson(d.payload, {}), test: !!d.test, created_at: d.created_at }));
         }
         res.set(overlayHeaders).json(out);
+    });
+
+    // ── Moderation (the creator and their moderators) ─────────
+    // Invitation links carry a secret in the path, like overlay links: no-store, no referrer, noindex.
+    const inviteHeaders = { 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Robots-Tag': 'noindex, nofollow' };
+    function inviteOr404(req, res) {
+        const inv = moderation.findInvite(req.params.token);
+        const profile = inv && profiles.bySubject(inv.creator_subject);
+        if (!inv || !profile) {
+            html(res, pageFor(req, { title: 'Invitation', robots: 'noindex,nofollow', body: pages.errorPage({ status: 404, title: 'This invitation is not valid', message: 'It may have been used, revoked or expired. Ask the creator for a new one.' }) }), 404, inviteHeaders);
+            return null;
+        }
+        return { inv, profile };
+    }
+    r.get('/moderate/invite/:token', withViewer, (req, res) => {
+        if (!req.viewer) return res.set(inviteHeaders).redirect(`/auth/login?next=${encodeURIComponent(req.originalUrl)}`);
+        const found = inviteOr404(req, res);
+        if (!found) return undefined;
+        return html(res, pageFor(req, {
+            title: `Moderate ${found.profile.display_name}`, robots: 'noindex,nofollow', canonicalPath: '/',
+            body: pages.invitePage({ profile: found.profile, csrf: csrfFor(req.viewer.subject), idem: idem(), secret: req.params.token, isSelf: found.profile.creator_subject === req.viewer.subject }),
+        }), 200, inviteHeaders);
+    });
+    r.post('/moderate/invite/:token', withViewer, form, (req, res) => {
+        if (!req.viewer) return res.set(inviteHeaders).redirect(303, '/auth/login');
+        if (!csrfOk(req)) return html(res, pageFor(req, { title: 'Invitation', robots: 'noindex,nofollow', body: pages.errorPage({ status: 403, title: 'That form expired', message: 'Open the invitation link again.' }) }), 403, inviteHeaders);
+        try {
+            const out = moderation.acceptInvite(req.params.token, { subject: req.viewer.subject, name: req.viewer.name || req.viewer.username });
+            const profile = profiles.bySubject(out.creator);
+            return res.set(inviteHeaders).redirect(303, `/moderate/${encodeURIComponent(profile.handle)}?done=${encodeURIComponent('You are now a moderator')}`);
+        } catch (e) {
+            if (e instanceof TipsError) return html(res, pageFor(req, { title: 'Invitation', robots: 'noindex,nofollow', body: pages.errorPage({ status: e.status, title: 'This invitation is not valid', message: e.detail || e.message }) }), e.status, inviteHeaders);
+            throw e;
+        }
+    });
+
+    /** The creator or one of their moderators, for /moderate/:handle; else null (the page is a 404). */
+    function modAccess(req) {
+        const p = profiles.byHandle(req.params.handle);
+        if (!p || !req.viewer) return { p };
+        const actor = moderation.actorFor(req.viewer, p.creator_subject, false);
+        return { p, actor };
+    }
+    function renderModerate(req, res, p, { error, status = 200 } = {}) {
+        const state = ['held', 'hidden', 'visible', 'all'].includes(req.query.state) ? req.query.state : 'all';
+        const out = moderation.queue(p.creator_subject, { state, cursor: req.query.cursor, limit: 50 });
+        const flash = MOD_FLASH.has(String(req.query.done || '')) ? String(req.query.done) : null;
+        html(res, pageFor(req, {
+            title: `Paid messages — ${p.display_name}`, robots: 'noindex,nofollow', canonicalPath: `/moderate/${p.handle}`,
+            body: pages.moderatePage({ profile: p, rows: out.rows, state, next: out.next_cursor, csrf: csrfFor(req.viewer.subject), idem: idem(), flash, error, isCreator: req.viewer.subject === p.creator_subject }),
+        }), status);
+    }
+    r.get('/moderate/:handle', withViewer, (req, res) => {
+        if (!req.viewer) return res.redirect(`/auth/login?next=${encodeURIComponent(req.originalUrl)}`);
+        const { p, actor } = modAccess(req);
+        if (!p || !actor) return notFound(req, res);
+        return renderModerate(req, res, p);
+    });
+    r.post('/moderate/:handle/:id/:act(hide|restore)', withViewer, form, (req, res) => {
+        if (!req.viewer) return res.redirect(303, `/auth/login?next=${encodeURIComponent(`/moderate/${req.params.handle}`)}`);
+        const { p, actor } = modAccess(req);
+        if (!p || !actor) return notFound(req, res);
+        if (!csrfOk(req)) return renderModerate(req, res, p, { error: 'That form expired. Please try again.', status: 403 });
+        const i = interactions.get(req.params.id);
+        if (!i || i.creator_subject !== p.creator_subject) return notFound(req, res);
+        try {
+            moderation[req.params.act](i, { ...actor, reason: req.body.reason });
+        } catch (e) {
+            if (e instanceof TipsError) return renderModerate(req, res, p, { error: e.detail || e.message, status: 400 });
+            throw e;
+        }
+        return res.redirect(303, `/moderate/${encodeURIComponent(p.handle)}?done=${req.params.act === 'hide' ? 'Hidden' : 'Shown'}`);
     });
 
     // ── Creator pages (last: /:handle catches everything else) ──

@@ -1,0 +1,24 @@
+{
+  "id": "tips.interaction.moderate",
+  "version": "1.0",
+  "owner": "tips",
+  "status": "active",
+  "visibility": "internal",
+  "description": "Moderate a creator's paid messages for them: read the review queue, hide a paid message from overlays, chat still to come and public pages, or show again one that was hidden or that the creator's word filter held. Never touches the money (no refund, no uncounting). People moderate as the creator or one of the creator's moderators; a service (e.g. Chat or Live relaying a channel moderator's action) needs this capability. Not in the charter list: proposed for the roadmap's \"privacy/moderation controls\" (Wave 9).",
+  "permissions": [
+    "tips:interactions"
+  ],
+  "resourceConstraints": [
+    "none"
+  ],
+  "quotaClass": "standard",
+  "events": [
+    "tips.interaction.moderated"
+  ],
+  "implementedBy": [
+    "GET /api/v1/moderation",
+    "GET /api/v1/moderation/log",
+    "POST /api/v1/interactions/:id/hide",
+    "POST /api/v1/interactions/:id/restore"
+  ]
+}

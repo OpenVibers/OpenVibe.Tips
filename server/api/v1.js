@@ -29,6 +29,10 @@
  * | POST /simulate                         | tips.simulation.run          | owner                               |
  * | GET  /profiles/:creator/supporters     | tips.profile.get (page off)  | anyone when the page shows it; owner|
  * | GET  /me/export, POST /me/erase        | —                            | the supporter's own tips            |
+ * | GET  /moderation?creator=&state=       | tips.interaction.moderate    | the creator and their moderators    |
+ * | POST /interactions/:id/hide|restore    | tips.interaction.moderate    | the creator and their moderators    |
+ * | GET  /moderation/log?creator=          | tips.interaction.moderate    | owner                               |
+ * | GET|POST /moderators, POST …/:s/remove | tips.profile.update          | owner                               |
  *
  * Paid requests take `privacy: { anonymous, hide_amount, private_message }` (server/domain/privacy.js).
  * Goals and supporters are answered in their public shape (the creator's page settings) to anyone
@@ -57,6 +61,7 @@ const CAP = {
     configGet: 'tips.overlay.config.get',
     configUpdate: 'tips.overlay.config.update',
     simulate: 'tips.simulation.run',
+    moderate: 'tips.interaction.moderate',   // proposed (docs/capabilities-proposal/), not yet in openvibe-contracts
 };
 
 function v1Router({ domain, apiAuth }) {
@@ -314,6 +319,57 @@ function v1Router({ domain, apiAuth }) {
         if (!c) fail(404, 'tips.overlay_config_not_found', 'no such overlay config');
         allow(req, CAP.configUpdate, c.creator_subject);
         res.json({ config: overlays.updateConfig(c, req.body || {}) });
+    }));
+
+    // ── Moderation (server/domain/moderation.js) ─────────────
+    const { moderation } = domain;
+    /** The creator, one of their moderators, or a service with tips.interaction.moderate. */
+    function moderatorOf(req, creator, { hideExistence = false } = {}) {
+        const p = req.principal;
+        if (p.kind === 'anonymous') fail(401, 'token.missing', 'sign in (a Network user token) or present a service token');
+        const a = moderation.actorFor(p, creator, p.kind === 'service' && apiAuth.granted(p, CAP.moderate));
+        if (a) return a;
+        if (p.kind === 'service') fail(403, 'capability.denied', `${CAP.moderate} not granted`);
+        if (hideExistence) fail(404, 'tips.interaction_not_found', 'no such interaction');
+        fail(403, 'tips.forbidden', 'only the creator and their moderators moderate this page');
+        return null;
+    }
+    r.get('/moderation', wrap((req, res) => {
+        const profile = creatorOf(req, req.query.creator);
+        moderatorOf(req, profile.creator_subject);
+        const out = moderation.queue(profile.creator_subject, { state: req.query.state || 'all', cursor: req.query.cursor, limit: req.query.limit });
+        res.json({ creator: { type: 'user', id: profile.creator_subject }, interactions: out.rows, next_cursor: out.next_cursor });
+    }));
+    r.get('/moderation/log', wrap((req, res) => {
+        const profile = creatorOf(req, req.query.creator);
+        allow(req, CAP.moderate, profile.creator_subject);
+        res.json({ log: moderation.log(profile.creator_subject) });
+    }));
+    for (const action of ['hide', 'restore']) {
+        r.post(`/interactions/:id/${action}`, ...write((req, res) => {
+            const i = interactions.get(req.params.id);
+            if (!i) fail(404, 'tips.interaction_not_found', 'no such interaction');
+            const actor = moderatorOf(req, i.creator_subject, { hideExistence: true });
+            const out = moderation[action](i, { ...actor, reason: (req.body || {}).reason });
+            res.json({ interaction: moderation.present(out.interaction), changed: out.changed, cancelled_effects: out.cancelled_effects || [] });
+        }));
+    }
+    r.get('/moderators', wrap((req, res) => {
+        const profile = creatorOf(req, req.query.creator);
+        allow(req, CAP.profileUpdate, profile.creator_subject);
+        res.json({ moderators: moderation.listModerators(profile.creator_subject).map(moderation.presentModerator) });
+    }));
+    r.post('/moderators', ...write((req, res) => {
+        const b = req.body || {};
+        const profile = creatorOf(req, b.creator);
+        allow(req, CAP.profileUpdate, profile.creator_subject);
+        const by = req.principal.kind === 'service' ? req.principal.sub : req.principal.subject;
+        res.status(201).json({ moderator: moderation.addModerator(profile.creator_subject, b.moderator, { name: b.name, addedBy: by }) });
+    }));
+    r.post('/moderators/:subject/remove', ...write((req, res) => {
+        const profile = creatorOf(req, (req.body || {}).creator);
+        allow(req, CAP.profileUpdate, profile.creator_subject);
+        res.json(moderation.removeModerator(profile.creator_subject, req.params.subject));
     }));
 
     // ── Simulation ───────────────────────────────────────────
