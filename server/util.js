@@ -28,10 +28,14 @@ function positiveInt(v, field, max) {
     return n;
 }
 
-/** Optional trimmed text: null when empty, refused when longer than max. */
+// Zero-width, bidi embedding/override/isolate marks, word joiner, BOM, soft hyphen: they hide words
+// from the creator's filter and turn text around on stream (docs/threat-review.md).
+const INVISIBLE = /[\u00AD\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/g;
+
+/** Optional trimmed text: null when empty, refused when longer than max. Invisible characters are dropped. */
 function text(v, field, max) {
     if (v == null) return null;
-    const s = String(v).replace(/\r\n?/g, '\n').trim();
+    const s = String(v).replace(INVISIBLE, '').replace(/\r\n?/g, '\n').trim();
     if (!s) return null;
     if (s.length > max) fail(422, 'tips.text_too_long', `${field} must be at most ${max} characters`);
     return s;
@@ -55,8 +59,8 @@ function entityRef(v, field = 'target') {
 /** The display name a supporter chose, kept short, without markup characters. */
 function displayName(v) {
     if (v == null) return null;
-    const s = String(v).replace(/[<>\u0000-\u001f]/g, '').trim().slice(0, 80);
+    const s = String(v).replace(INVISIBLE, '').replace(/[<>\u0000-\u001f]/g, '').trim().slice(0, 80);
     return s || null;
 }
 
-module.exports = { TipsError, fail, prefixedId, iso, sha256, json, positiveInt, text, userSubject, entityRef, displayName };
+module.exports = { TipsError, fail, prefixedId, iso, sha256, json, positiveInt, text, userSubject, entityRef, displayName, INVISIBLE };

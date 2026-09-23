@@ -38,7 +38,7 @@
  * export their tips and erase their data from them (erase(): the money record stays, the person
  * goes; tips.interaction.erased redacts the earlier events in OpenVibe.Events).
  */
-const { fail, iso, prefixedId, json, positiveInt, text, userSubject, entityRef, displayName } = require('../util');
+const { fail, iso, prefixedId, json, positiveInt, text, userSubject, entityRef, displayName, INVISIBLE } = require('../util');
 const { VOICES } = require('./profiles');
 const { parsePrivacy, publicName, shownName, privacyOf, isAnonymous } = require('./privacy');
 const { BillingCallError } = require('../billing-client');
@@ -61,8 +61,18 @@ function createInteractions(ctx) {
     const byBillingTxn = (txnId) => db.prepare('SELECT * FROM tip_interactions WHERE billing_txn_id = ?').get(txnId) || null;
 
     // ── Input rules (the creator's settings) ─────────────────
+    // Plain words only: no control or invisible characters, no links, no markup a speech engine could
+    // take as SSML.
     function cleanTts(s) {
-        return String(s || '').replace(/[\u0000-\u001f]/g, ' ').replace(/https?:\/\/\S+/gi, 'link').replace(/\s+/g, ' ').trim();
+        return String(s || '').replace(INVISIBLE, '').replace(/[\u0000-\u001f]/g, ' ').replace(/https?:\/\/\S+/gi, 'link').replace(/[<>]/g, ' ')
+            .replace(/\s+/g, ' ').trim();
+    }
+
+    /** A supporter may not show up under the creator's own name or handle (impersonation on stream). */
+    function checkName(profile, name) {
+        const fold = (v) => String(v || '').normalize('NFKC').replace(/^@/, '').trim().toLowerCase();
+        const n = fold(name);
+        if (n && (n === fold(profile.display_name) || n === fold(profile.handle))) fail(422, 'tips.name_taken', `"${name}" is ${profile.display_name}'s own name; choose another to show`);
     }
 
     function mediaUrl(v) {
@@ -150,10 +160,17 @@ function createInteractions(ctx) {
         }
         const target = entityRef(input.target);
         const privacy = parsePrivacy(input.privacy, v.kind);
+        if (!privacy.anonymous) checkName(profile, displayName(supporterName));
         return ctx.tx(() => {
             if (idempotencyKey) {
                 const prev = db.prepare('SELECT * FROM tip_interactions WHERE idempotency_key = ?').get(idempotencyKey);
                 if (prev) return { interaction: prev, replay: true };
+            }
+            if (funding === 'checkout') {
+                // Each unpaid checkout is a Billing intent and a row here: bounded per supporter.
+                const since = iso(ctx.now() - 24 * 3600 * 1000);
+                const open = db.prepare("SELECT COUNT(*) AS n FROM tip_interactions WHERE supporter_subject = ? AND funding = 'checkout' AND payment_state = 'pending' AND created_at >= ?").get(from, since).n;
+                if (open >= config.limits.pendingCheckouts) fail(429, 'tips.too_many_pending', `you have ${open} unpaid checkouts; finish or wait for them before starting another`);
             }
             const i = insert({
                 id: prefixedId('tint', ctx.now()), creator_subject: profile.creator_subject, supporter_subject: from, supporter_name: displayName(supporterName) || 'Someone',
@@ -326,8 +343,13 @@ function createInteractions(ctx) {
             const target = meta.target;
             if (target && target.service === 'tips' && target.type === 'interaction') {
                 const i = get(target.id);
-                if (i) { settleByTransaction(i, txn); return 'settled'; }
-                return 'ignored:unknown_interaction';
+                if (!i) return 'ignored:unknown_interaction';
+                // Only the transfer Tips asked for settles the interaction: same amount, same creator, same
+                // supporter. Another service's donation that merely names it (a 1-bit transfer claiming a
+                // 10,000-bit paid message) is recorded as what it is, a donation of its own amount.
+                const matches = Number(meta.amount_bits) === i.amount && p.to_subject === i.creator_subject && (!i.supporter_subject || p.from_subject === i.supporter_subject);
+                if (matches) { settleByTransaction(i, txn); return 'settled'; }
+                ctx.log.warn(`[Tips] donation ${txn.id} names interaction ${i.id} but does not match it (amount, creator or supporter); recorded on its own`);
             }
             // A donation Tips did not start: record it once, by its transaction id.
             if (!p.to_subject) return 'ignored:no_recipient';

@@ -286,8 +286,9 @@ function v1Router({ domain, apiAuth }) {
         allow(req, CAP.tokenCreate, profile.creator_subject);
         const by = req.principal.kind === 'service' ? req.principal.sub : req.principal.subject;
         const out = overlays.createToken(profile.creator_subject, { scopes: b.scopes, label: b.label, configId: b.config_id, createdBy: by });
-        // Shown once: only its hash is stored. An idempotent replay of this call returns it again to
-        // the same caller with the same key, which is the point of the key.
+        // Shown once: only its hash is stored, and the stored answer for an Idempotency-Key replay has no
+        // secret either (a caller who lost the answer revokes the token and creates another).
+        res.locals.storedBody = { token: out.token, secret: null, overlay_url: null, events_url: null, note: 'the secret is shown once; revoke this token and create another' };
         res.status(201).json({ token: out.token, secret: out.secret, overlay_url: out.overlay_url, events_url: out.events_url });
     }));
     r.post('/overlay-tokens/:id/revoke', ...write((req, res) => {

@@ -245,12 +245,16 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
     r.get('/overlay/:token/events', (req, res) => {
         const t = tokenOr404(req, res);
         if (!t) return;
+        if (overlays.streamsFor(t) >= config.overlays.maxStreamsPerToken) {
+            res.status(429).set({ ...overlayHeaders, 'Retry-After': '30' }).type('text/plain').send('Too many open streams for this overlay link.');
+            return;
+        }
         res.status(200).set({ ...overlayHeaders, 'Content-Type': 'text/event-stream; charset=utf-8', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
         res.flushHeaders();
         res.write('retry: 3000\n\n');
-        const config = t.config_id ? overlays.getConfig(t.config_id) : null;
+        const overlayConfig = t.config_id ? overlays.getConfig(t.config_id) : null;
         const lastEventId = req.get('last-event-id') != null ? req.get('last-event-id') : req.query.last_event_id;
-        overlays.attach(t, res, { lastEventId: lastEventId != null && lastEventId !== '' ? lastEventId : undefined, config });
+        overlays.attach(t, res, { lastEventId: lastEventId != null && lastEventId !== '' ? lastEventId : undefined, config: overlayConfig });
     });
     r.get('/overlay/:token/state', (req, res) => {
         const t = tokenOr404(req, res);

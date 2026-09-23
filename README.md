@@ -258,6 +258,21 @@ goals, overlay links shown once, alert settings, simulation, totals, recent tips
 Signed-in forms carry an HMAC anti-forgery token and a per-render nonce. Shared chrome: Network
 `navbar.js`, `openvibe-shared` app icon, SSR footer and `<noscript>` navigation.
 
+## Security
+
+[docs/threat-review.md](docs/threat-review.md) is the written threat review: overlays (tokenised URLs),
+paid-message abuse, TTS, amount spoofing, replay and privacy, with each finding's status and the test
+that shows it. The fixes it made:
+- a Billing donation settles an interaction only when amount, creator and supporter match;
+- a replayed `POST /overlay-tokens` answer carries no secret, and none is stored;
+- open streams per overlay token (`TIPS_OVERLAY_MAX_STREAMS`) and unpaid checkouts per supporter
+  (`TIPS_MAX_PENDING_CHECKOUTS`) are bounded;
+- the creator's own name is refused as a supporter name;
+- invisible and direction-override characters are dropped, and TTS text carries no markup.
+
+The regressions are in `test/security.test.js`. It is an internal review; an independent one is still due
+before launch.
+
 ## Import and reconciliation
 
 `scripts/import-live.js` reads a **copy** of Live's database (read-only) after Billing's own import, and
@@ -322,8 +337,8 @@ exist here (plan §12.12):
    Events (Billing is in shadow and has sent no events; the production database is empty; the Live
    import has not been run);
 5. capability and event registration against OpenVibe.Contracts — ✔ v0.15.0, payload schemas in v0.30.2 (pinned);
-6. a migration/seed strategy ✔, a security/threat review (not done beyond the tests' refusals), and
-   sitemap/robots ✔ (no feed);
+6. a migration/seed strategy ✔, a written threat review ✔ ([docs/threat-review.md](docs/threat-review.md),
+   internal; an independent review is still due), and sitemap/robots ✔ (no feed);
 7. acceptance tests proving the advertised functionality — ✔ (table above).
 
 The launch release removes the domain from `OpenVibe.Sites/sites.json`, switches routing and registers

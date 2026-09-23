@@ -89,6 +89,8 @@ function loadConfig(env = process.env) {
             ttlMs: int(env.TIPS_OVERLAY_TTL_MS, 10 * 60 * 1000),
             heartbeatMs: int(env.TIPS_OVERLAY_HEARTBEAT_MS, 25_000),
             replayLimit: int(env.TIPS_OVERLAY_REPLAY_LIMIT, 50),
+            // Open event streams per overlay token: an OBS scene or two, not a leaked link's flood.
+            maxStreamsPerToken: int(env.TIPS_OVERLAY_MAX_STREAMS, 10),
         },
 
         limits: {
@@ -96,6 +98,7 @@ function loadConfig(env = process.env) {
             messageChars: int(env.TIPS_MESSAGE_CHARS, 300),        // Live's donation message limit
             ttsHardCap: int(env.TIPS_TTS_HARD_CAP, 1200),          // Live's hard TTS length cap
             goalTitleChars: 120,                                   // Live's goal title limit
+            pendingCheckouts: int(env.TIPS_MAX_PENDING_CHECKOUTS, 20), // unpaid checkouts per supporter per day
         },
 
         jobs: {

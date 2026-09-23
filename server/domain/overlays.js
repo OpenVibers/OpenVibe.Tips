@@ -329,6 +329,7 @@ function createOverlays(ctx) {
     }
 
     function connected(creator) { return (clients.get(creator) || new Set()).size; }
+    function streamsFor(token) { let n = 0; for (const c of clients.get(token.creator_subject) || []) if (c.tokenId === token.id) n++; return n; }
     function closeAll() { for (const set of clients.values()) for (const c of [...set]) detach(c); }
 
     function recentDeliveries(creator, limit = 50) {
@@ -338,7 +339,7 @@ function createOverlays(ctx) {
     return {
         SCOPES, createToken, getToken, listTokens, authenticate, revokeToken, presentToken,
         getConfig, listConfigs, createConfig, updateConfig, presentConfig,
-        addAlert, refreshInteraction, retract, unretract, addGoalDelivery, sweepFailed, attach, detach, closeToken, notify, connected, closeAll, recentDeliveries,
+        addAlert, refreshInteraction, retract, unretract, addGoalDelivery, sweepFailed, attach, detach, closeToken, notify, connected, streamsFor, closeAll, recentDeliveries,
     };
 }
 

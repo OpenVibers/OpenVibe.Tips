@@ -39,8 +39,11 @@ function idempotent(db, now) {
         const json = res.json.bind(res);
         res.json = (body) => {
             if (res.statusCode >= 200 && res.statusCode < 300) {
+                // A handler whose answer carries a secret (an overlay token) sets res.locals.storedBody: the
+                // replay gets that instead, so no secret is kept in plain text here.
+                const stored = res.locals.storedBody !== undefined ? res.locals.storedBody : body;
                 db.prepare('INSERT OR IGNORE INTO api_idempotency (key, request_hash, method, path, status, response, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-                    .run(scoped, hash, req.method, `${req.baseUrl}${req.path}`, res.statusCode, JSON.stringify(body), new Date(now()).toISOString());
+                    .run(scoped, hash, req.method, `${req.baseUrl}${req.path}`, res.statusCode, JSON.stringify(stored), new Date(now()).toISOString());
             }
             return json(body);
         };
