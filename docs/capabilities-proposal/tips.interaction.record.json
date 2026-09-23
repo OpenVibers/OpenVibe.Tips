@@ -1,0 +1,21 @@
+{
+  "id": "tips.interaction.record",
+  "version": "1.0",
+  "owner": "tips",
+  "status": "active",
+  "visibility": "internal",
+  "description": "Record a tip that never touched OpenVibe money (ADR-012 EXTERNAL: a tip on a creator's own PowerChat) once per (provider, provider_ref); no Billing liability, excluded from Billing reconciliation. Not in the charter list: proposed because EXTERNAL tips need a recording path while Billing emits nothing for them.",
+  "permissions": [
+    "tips:interactions"
+  ],
+  "resourceConstraints": [
+    "none"
+  ],
+  "quotaClass": "standard",
+  "events": [
+    "tips.interaction.ready"
+  ],
+  "implementedBy": [
+    "POST /api/v1/interactions/external"
+  ]
+}

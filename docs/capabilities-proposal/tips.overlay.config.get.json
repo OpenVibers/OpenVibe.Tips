@@ -1,0 +1,20 @@
+{
+  "id": "tips.overlay.config.get",
+  "version": "1.0",
+  "owner": "tips",
+  "status": "active",
+  "visibility": "first-party",
+  "description": "Read a creator's overlay configs (alert and goal display settings).",
+  "permissions": [
+    "tips:overlays"
+  ],
+  "resourceConstraints": [
+    "owner"
+  ],
+  "quotaClass": "standard",
+  "events": [],
+  "implementedBy": [
+    "GET /api/v1/overlay-configs",
+    "GET /api/v1/overlay-configs/:id"
+  ]
+}

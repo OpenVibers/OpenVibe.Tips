@@ -1,0 +1,20 @@
+{
+  "id": "tips.overlay.token.create",
+  "version": "1.0",
+  "owner": "tips",
+  "status": "active",
+  "visibility": "first-party",
+  "description": "Mint a scoped overlay token (alerts, goals) for a creator — shown once, stored hashed, never a creator cookie — and list a creator's tokens without secrets.",
+  "permissions": [
+    "tips:overlays"
+  ],
+  "resourceConstraints": [
+    "owner"
+  ],
+  "quotaClass": "standard",
+  "events": [],
+  "implementedBy": [
+    "POST /api/v1/overlay-tokens",
+    "GET /api/v1/overlay-tokens"
+  ]
+}

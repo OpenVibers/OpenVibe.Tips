@@ -1,0 +1,19 @@
+{
+  "id": "tips.interaction.get",
+  "version": "1.0",
+  "owner": "tips",
+  "status": "active",
+  "visibility": "first-party",
+  "description": "Read one interaction with its separate payment state (from Billing) and delivery state (effects).",
+  "permissions": [
+    "tips:interactions"
+  ],
+  "resourceConstraints": [
+    "owner"
+  ],
+  "quotaClass": "standard",
+  "events": [],
+  "implementedBy": [
+    "GET /api/v1/interactions/:id"
+  ]
+}

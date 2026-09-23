@@ -1,0 +1,21 @@
+{
+  "id": "tips.superchat.create",
+  "version": "1.0",
+  "owner": "tips",
+  "status": "active",
+  "visibility": "first-party",
+  "description": "Start a paid (highlighted) chat message for a supporter; the paid_messages row exists only after Billing settles it.",
+  "permissions": [
+    "tips:checkout"
+  ],
+  "resourceConstraints": [
+    "owner"
+  ],
+  "quotaClass": "payments",
+  "events": [
+    "tips.interaction.ready"
+  ],
+  "implementedBy": [
+    "POST /api/v1/paid-messages"
+  ]
+}

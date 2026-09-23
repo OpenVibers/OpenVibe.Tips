@@ -1,0 +1,22 @@
+{
+  "id": "tips.checkout.create",
+  "version": "1.0",
+  "owner": "tips",
+  "status": "active",
+  "visibility": "first-party",
+  "description": "Start a tip for a supporter (on_behalf SubjectRef): paid from the supporter's Billing credit (billing.transfer.create) or through a Billing checkout intent (billing.intent.create). Tips never prices money; Billing does. Idempotent by Idempotency-Key.",
+  "permissions": [
+    "tips:checkout"
+  ],
+  "resourceConstraints": [
+    "owner"
+  ],
+  "quotaClass": "payments",
+  "events": [
+    "tips.interaction.ready",
+    "tips.interaction.cancelled"
+  ],
+  "implementedBy": [
+    "POST /api/v1/checkout"
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "id": "tips.overlay.token.revoke",
+  "version": "1.0",
+  "owner": "tips",
+  "status": "active",
+  "visibility": "first-party",
+  "description": "Revoke an overlay token; open overlay streams using it are closed immediately.",
+  "permissions": [
+    "tips:overlays"
+  ],
+  "resourceConstraints": [
+    "owner"
+  ],
+  "quotaClass": "standard",
+  "events": [],
+  "implementedBy": [
+    "POST /api/v1/overlay-tokens/:id/revoke"
+  ]
+}

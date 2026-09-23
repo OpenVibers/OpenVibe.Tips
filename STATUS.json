@@ -1,7 +1,11 @@
 {
   "repository": "OpenVibers/OpenVibe.Tips",
-  "stage": "placeholder",
-  "code": false,
+  "stage": "alpha",
+  "code": true,
+  "wave": "W9",
   "plan": "OpenVibe End-to-End Realignment & Implementation Plan, revision 3 (20 Sep 2026)",
-  "updated": "2026-09-21"
+  "adr": "ADR-012",
+  "authoritative": false,
+  "notes": "Runtime, API, SSR pages, overlays, Billing settlement consumer, events outbox, Live import and reconciliation are built and tested against stubs. Not deployed; the openvibe.tips placeholder stays on OpenVibe.Sites until the launch rule in README.md holds. Live stays the place tips happen until the Billing cutover and the Live chat patch ship.",
+  "updated": "2026-09-22"
 }

@@ -1,0 +1,22 @@
+{
+  "id": "tips.goal.update",
+  "version": "1.0",
+  "owner": "tips",
+  "status": "active",
+  "visibility": "first-party",
+  "description": "Edit a goal (title, target, description, image, order) with optimistic revision checks; read private goals with contributions.",
+  "permissions": [
+    "tips:goals"
+  ],
+  "resourceConstraints": [
+    "owner"
+  ],
+  "quotaClass": "standard",
+  "events": [
+    "tips.goal.updated"
+  ],
+  "implementedBy": [
+    "PATCH /api/v1/goals/:id",
+    "GET /api/v1/goals/:id"
+  ]
+}

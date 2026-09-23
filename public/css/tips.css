@@ -1,0 +1,64 @@
+/* OpenVibe.Tips — page styles. Colours follow the shared theme variables (theme-loader.js). */
+:root {
+  --tips-bg: var(--bg-primary, #0a0f1c);
+  --tips-card: var(--bg-secondary, #121a2b);
+  --tips-text: var(--text-primary, #e6edf7);
+  --tips-muted: var(--text-secondary, #9aa7bd);
+  --tips-accent: var(--accent, #3b82f6);
+  --tips-on-accent: var(--on-accent, #ffffff);
+  --tips-border: var(--border, rgba(255, 255, 255, .1));
+  --tips-bad: #f87171;
+  --tips-good: #34d399;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--tips-bg); color: var(--tips-text); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+a { color: var(--tips-accent); }
+.site-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; padding: 12px 20px; border-bottom: 1px solid var(--tips-border); }
+.ov-has-navbar .site-head { display: none; }
+.site-head .brand { font-weight: 700; color: inherit; text-decoration: none; }
+.site-head nav { display: flex; gap: 14px; flex: 1; }
+.site-head nav a { color: var(--tips-muted); text-decoration: none; }
+.site-head nav a[aria-current] { color: var(--tips-text); }
+.page { max-width: 880px; margin: 0 auto; padding: 24px 16px 48px; }
+h1 { font-size: 1.8rem; margin: .2em 0 .5em; }
+.hero p { font-size: 1.1rem; color: var(--tips-muted); }
+.card { background: var(--tips-card); border: 1px solid var(--tips-border); border-radius: 12px; padding: 18px 20px; margin: 18px 0; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; }
+.grid .card { margin: 0; }
+.btn { display: inline-block; background: var(--tips-accent); color: var(--tips-on-accent); border: 0; border-radius: 8px; padding: 9px 16px; font: inherit; font-weight: 600; cursor: pointer; text-decoration: none; }
+.btn.ghost { background: transparent; color: var(--tips-accent); border: 1px solid var(--tips-accent); }
+form label { display: block; margin: 10px 0; }
+form input[type=text], form input[type=number], form input[type=url], form textarea, form select, input.copy {
+  display: block; width: 100%; margin-top: 4px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--tips-border);
+  background: var(--tips-bg); color: var(--tips-text); font: inherit; }
+form input[type=checkbox], form input[type=radio] { margin-right: 6px; }
+form.inline { display: inline-flex; flex-wrap: wrap; gap: 8px; align-items: end; margin: 4px 8px 12px 0; }
+form.inline label { margin: 0; }
+fieldset { border: 1px solid var(--tips-border); border-radius: 8px; margin: 12px 0; }
+small, .fine, .meta { color: var(--tips-muted); }
+.fine { font-size: .9rem; }
+.notice { background: rgba(59, 130, 246, .12); border: 1px solid rgba(59, 130, 246, .4); border-radius: 8px; padding: 10px 14px; }
+.notice.error { background: rgba(248, 113, 113, .12); border-color: rgba(248, 113, 113, .5); }
+.creator-head { display: flex; gap: 18px; align-items: center; }
+.creator-head .avatar { border-radius: 50%; object-fit: cover; }
+.headline { color: var(--tips-muted); margin: 0; }
+.goal { margin: 12px 0; }
+.goal h3 { margin: 0 0 4px; font-size: 1.05rem; }
+.bar { height: 12px; border-radius: 6px; background: var(--tips-border); overflow: hidden; }
+.bar span { display: block; height: 100%; background: var(--tips-accent); }
+.goal.reached .bar span { background: var(--tips-good); }
+table.list { width: 100%; border-collapse: collapse; font-size: .95rem; }
+table.list th, table.list td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--tips-border); }
+.num { text-align: right !important; font-variant-numeric: tabular-nums; }
+tr.test td, tr.revoked td { color: var(--tips-muted); }
+dl.receipt { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; }
+dl.receipt dt { color: var(--tips-muted); }
+dl.receipt dd { margin: 0; overflow-wrap: anywhere; }
+.big { font-size: 1.8rem; font-weight: 700; margin: 0; }
+.creators { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+.creators a { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; background: var(--tips-card); text-decoration: none; color: inherit; }
+.creators img { border-radius: 50%; }
+.steps li { margin: 8px 0; }
+.js .tip-form .when-tts, .js .tip-form .when-media { display: none; }
+.js .tip-form[data-kind=tts] .when-tts, .js .tip-form[data-kind=media_request] .when-media { display: block; }
+@media (max-width: 560px) { dl.receipt { grid-template-columns: 1fr; } .creator-head { flex-direction: column; align-items: flex-start; } table.list { font-size: .85rem; } }

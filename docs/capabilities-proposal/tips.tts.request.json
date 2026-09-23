@@ -1,0 +1,21 @@
+{
+  "id": "tips.tts.request",
+  "version": "1.0",
+  "owner": "tips",
+  "status": "active",
+  "visibility": "first-party",
+  "description": "Start a paid text-to-speech request for a supporter, within the creator's TTS settings; delivered to chat only after settlement.",
+  "permissions": [
+    "tips:checkout"
+  ],
+  "resourceConstraints": [
+    "owner"
+  ],
+  "quotaClass": "payments",
+  "events": [
+    "tips.interaction.ready"
+  ],
+  "implementedBy": [
+    "POST /api/v1/tts-requests"
+  ]
+}

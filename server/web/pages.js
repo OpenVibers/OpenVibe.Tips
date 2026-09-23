@@ -1,0 +1,228 @@
+'use strict';
+
+/**
+ * Server-rendered page bodies. Plain HTML forms everywhere: a supporter can tip, and a creator can
+ * run the dashboard, with JavaScript switched off. Copy rules: no pricing claims, no pleading copy —
+ * the creator's own headline is the only pitch on their page.
+ */
+const { esc } = require('./layout');
+const { VOICES } = require('../domain/profiles');
+
+const n = (v) => Number(v || 0).toLocaleString('en-US');
+const when = (s) => (s ? esc(String(s).replace('T', ' ').slice(0, 16)) + ' UTC' : '');
+const KIND_LABEL = { tip: 'Tip', paid_message: 'Paid message', tts: 'Text-to-speech', media_request: 'Media request' };
+const PAY_LABEL = { pending: 'Payment pending', settled: 'Paid', reversed: 'Reversed', failed: 'Payment failed' };
+const DELIVERY_LABEL = { awaiting_payment: 'Waiting for payment', queued: 'Being delivered', delivered: 'Delivered', failed: 'Delivery failed', cancelled: 'Cancelled' };
+
+function hidden(fields) {
+    return Object.entries(fields).map(([k, v]) => `<input type="hidden" name="${esc(k)}" value="${esc(v)}">`).join('');
+}
+
+function goalCard(g) {
+    return `<article class="goal${g.reached ? ' reached' : ''}">
+  <h3>${esc(g.title)}</h3>
+  ${g.description ? `<p>${esc(g.description)}</p>` : ''}
+  <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="${g.target_amount}" aria-valuenow="${g.current_amount}"><span style="width:${g.percent}%"></span></div>
+  <p class="meta">${n(g.current_amount)} of ${n(g.target_amount)} Vibes · ${g.percent}%${g.reached ? ' · reached' : ''}${g.status === 'closed' ? ' · closed' : ''}</p>
+</article>`;
+}
+
+function errorBox(msg) { return msg ? `<p class="notice error" role="alert">${esc(msg)}</p>` : ''; }
+
+function home({ creators }) {
+    return `<section class="hero">
+  <h1>Support the creators you watch</h1>
+  <p>Tip a creator with Vibes, send a highlighted paid message, have your message read out, or request a video for their stream. Creators set goals and show every tip on stream with an overlay.</p>
+  <p class="actions"><a class="btn" href="/dashboard">Open your creator dashboard</a> <a class="btn ghost" href="/receipts">Your receipts</a></p>
+</section>
+<section>
+  <h2>How it works</h2>
+  <ol class="steps">
+    <li><b>Pick a creator.</b> Every creator who switched their page on has one at openvibe.tips/<i>name</i>.</li>
+    <li><b>Choose what to send.</b> A tip, a paid message, text-to-speech or a media request, within the creator's own limits.</li>
+    <li><b>Pay with Vibes.</b> From your Vibes balance, or through checkout. Payments are handled by OpenVibe.Billing; your receipt shows when the payment settled and when your message was delivered.</li>
+  </ol>
+</section>
+${creators.length ? `<section><h2>Creators on OpenVibe.Tips</h2><ul class="creators">${creators.map((c) => `<li><a href="/${esc(c.handle)}">${c.avatar_url ? `<img src="${esc(c.avatar_url)}" alt="" width="40" height="40" loading="lazy">` : ''}<span>${esc(c.display_name)}</span></a></li>`).join('')}</ul></section>` : ''}`;
+}
+
+/** The tip form: every field works as a plain POST. */
+function tipForm({ profile, goals, viewer, csrf, idem, values = {}, providers, error }) {
+    const kinds = [['tip', 'Tip', profile.min_amount]];
+    kinds.push(['paid_message', 'Paid message (highlighted in chat)', Math.max(profile.min_amount, profile.paid_message_min)]);
+    if (profile.tts_enabled) kinds.push(['tts', 'Text-to-speech (read out on stream)', Math.max(profile.min_amount, profile.tts_min_amount)]);
+    if (profile.media_requests_enabled) kinds.push(['media_request', 'Media request', Math.max(profile.min_amount, profile.media_request_min)]);
+    const kind = values.kind || 'tip';
+    const active = goals.filter((g) => g.status === 'active');
+    if (!profile.accepting) return `<section class="card"><p>${esc(profile.display_name)} is not accepting tips right now.</p></section>`;
+    return `<form class="card tip-form" method="post" action="/${esc(profile.handle)}/tip">
+  <h2>Send ${esc(profile.display_name)} something</h2>
+  ${errorBox(error)}
+  ${hidden({ csrf: csrf || '', idem })}
+  <fieldset class="kinds"><legend>What to send</legend>
+    ${kinds.map(([k, label, min]) => `<label><input type="radio" name="kind" value="${k}"${k === kind ? ' checked' : ''}> ${esc(label)} <small>from ${n(min)} Vibes</small></label>`).join('\n    ')}
+  </fieldset>
+  <label>Amount (Vibes) <input type="number" name="amount" min="1" max="10000000" step="1" required value="${esc(values.amount || '')}" inputmode="numeric"></label>
+  <label>Message <small>(optional for a tip, up to 300 characters)</small><textarea name="message" maxlength="300" rows="3">${esc(values.message || '')}</textarea></label>
+  ${profile.tts_enabled ? `<div class="when-tts"><label>Text to read out <small>(up to ${profile.tts_max_chars} characters; the message is used when empty)</small><textarea name="tts_text" maxlength="${profile.tts_max_chars}" rows="2">${esc(values.tts_text || '')}</textarea></label>
+  <label>Voice <select name="tts_voice">${VOICES.map((v) => `<option${v === (values.tts_voice || profile.tts_voice) ? ' selected' : ''}>${v}</option>`).join('')}</select></label></div>` : ''}
+  ${profile.media_requests_enabled ? `<label class="when-media">Media link <small>(YouTube, up to ${Math.floor(profile.media_max_seconds / 60)} minutes)</small><input type="url" name="media_url" value="${esc(values.media_url || '')}" placeholder="https://www.youtube.com/watch?v=…"></label>` : ''}
+  ${active.length ? `<label>Count toward <select name="goal_id">${active.length > 1 ? '<option value="">No goal</option>' : ''}${active.map((g) => `<option value="${esc(g.id)}"${values.goal_id === g.id ? ' selected' : ''}>${esc(g.title)}</option>`).join('')}</select></label>` : ''}
+  <fieldset class="pay"><legend>Pay with</legend>
+    <label><input type="radio" name="pay_with" value="credit"${values.pay_with !== 'checkout' ? ' checked' : ''}> My Vibes balance</label>
+    ${providers.length ? `<label><input type="radio" name="pay_with" value="checkout"${values.pay_with === 'checkout' ? ' checked' : ''}> Checkout (${providers.map(esc).join(', ')}) <small>buys exactly these Vibes and gives them</small></label>` : ''}
+  </fieldset>
+  <label>Show my name as <input type="text" name="supporter_name" maxlength="80" value="${esc(values.supporter_name || (viewer ? viewer.name || viewer.username || '' : ''))}"></label>
+  <button type="submit" class="btn">${viewer ? 'Send' : 'Sign in to send'}</button>
+  <p class="fine">Tips are final once paid. Your receipt shows the payment and delivery status separately.</p>
+</form>`;
+}
+
+function creatorPage({ profile, goals, viewer, csrf, idem, values, providers, error, ownerPreview }) {
+    const active = goals.filter((g) => g.status === 'active');
+    return `${ownerPreview ? '<p class="notice">Your page is switched off: only you can see it, and search engines are told not to index it. Switch it on in the <a href="/dashboard">dashboard</a>.</p>' : ''}
+<section class="creator-head">
+  ${profile.avatar_url ? `<img class="avatar" src="${esc(profile.avatar_url)}" alt="" width="96" height="96">` : ''}
+  <div><h1>${esc(profile.display_name)}</h1>${profile.headline ? `<p class="headline">${esc(profile.headline)}</p>` : ''}
+  <p class="links"><a href="https://openvibe.live/${esc(profile.handle)}">Watch on OpenVibe.Live</a> · <a href="/${esc(profile.handle)}/goals">Goals</a></p></div>
+</section>
+${active.length ? `<section><h2>Goals</h2>${active.map(goalCard).join('')}</section>` : ''}
+${tipForm({ profile, goals, viewer, csrf, idem, values, providers, error })}`;
+}
+
+function goalsPage({ profile, goals }) {
+    return `<h1>${esc(profile.display_name)} — goals</h1>
+<p><a href="/${esc(profile.handle)}">Back to ${esc(profile.display_name)}</a></p>
+${goals.length ? goals.map(goalCard).join('') : '<p>No goals yet.</p>'}
+<p class="fine">Goal totals count settled payments only.</p>`;
+}
+
+function receiptRow(i, as) {
+    const who = as === 'creator' ? esc(i.supporter_name || 'Someone') : `<a href="/${esc(i.creator_handle || '')}">${esc(i.creator_name || 'creator')}</a>`;
+    return `<tr${i.test ? ' class="test"' : ''}><td><a href="/receipts/${esc(i.id)}">${when(i.created_at)}</a></td><td>${who}</td><td>${esc(KIND_LABEL[i.kind])}${i.test ? ' <small>(simulation)</small>' : ''}</td><td class="num">${n(i.amount)}</td><td>${esc(PAY_LABEL[i.payment.state])}</td><td>${esc(DELIVERY_LABEL[i.delivery.state])}</td></tr>`;
+}
+
+function receiptsPage({ rows, next }) {
+    return `<h1>Your receipts</h1>
+${rows.length ? `<table class="list"><thead><tr><th>When</th><th>Creator</th><th>What</th><th class="num">Vibes</th><th>Payment</th><th>Delivery</th></tr></thead><tbody>${rows.map((r) => receiptRow(r, 'supporter')).join('')}</tbody></table>` : '<p>No tips yet.</p>'}
+${next ? `<p><a href="/receipts?cursor=${esc(next)}">Older</a></p>` : ''}`;
+}
+
+function receiptPage({ i, profile, as, cancelled }) {
+    const checkoutOpen = i.payment.state === 'pending' && i.checkout && i.checkout.url && as === 'supporter';
+    return `<h1>Receipt</h1>
+${cancelled && i.payment.state === 'pending' ? '<p class="notice">Checkout was cancelled. Nothing was charged; you can start again from the creator\'s page.</p>' : ''}
+<dl class="receipt">
+  <dt>Creator</dt><dd>${profile ? `<a href="/${esc(profile.handle)}">${esc(profile.display_name)}</a>` : 'unknown'}</dd>
+  <dt>From</dt><dd>${esc(i.supporter_name || 'Someone')}</dd>
+  <dt>What</dt><dd>${esc(KIND_LABEL[i.kind])}${i.test ? ' (simulation, not charged, not counted)' : ''}</dd>
+  <dt>Amount</dt><dd>${n(i.amount)} Vibes</dd>
+  ${i.message ? `<dt>Message</dt><dd>${esc(i.message)}</dd>` : ''}
+  ${i.tts ? `<dt>Read out</dt><dd>${esc(i.tts.text)} <small>(${esc(i.tts.voice)})</small></dd>` : ''}
+  ${i.media ? `<dt>Media</dt><dd>${esc(i.media.url)}</dd>` : ''}
+  <dt>Payment</dt><dd>${esc(PAY_LABEL[i.payment.state])}${i.payment.settled_at ? ` · ${when(i.payment.settled_at)}` : ''}${i.payment.failure ? ` · ${esc(i.payment.failure)}` : ''}</dd>
+  <dt>Delivery</dt><dd>${esc(DELIVERY_LABEL[i.delivery.state])}${i.delivery.delivered_at ? ` · ${when(i.delivery.delivered_at)}` : ''}</dd>
+  ${i.payment.billing_txn_id ? `<dt>Billing reference</dt><dd><code>${esc(i.payment.billing_txn_id)}</code></dd>` : ''}
+  <dt>Receipt id</dt><dd><code>${esc(i.id)}</code></dd>
+</dl>
+${checkoutOpen ? `<p><a class="btn" href="${esc(i.checkout.url)}" rel="noopener">Continue to checkout</a></p>` : ''}
+${i.payment.state === 'pending' && i.funding === 'checkout' && !i.checkout?.url ? '<p class="notice">This checkout has no payment link yet. Nothing is charged until the payment completes.</p>' : ''}
+<p class="fine">The payment state comes from OpenVibe.Billing. Delivery is tracked separately: a delivery problem never undoes a payment.</p>`;
+}
+
+function dashboard({ profile, goals, tokens, configs, totals, recent, deliveries, csrf, idem, flash, error, connected, chatAdapter }) {
+    const p = profile;
+    const f = (k) => (p[k] ? ' checked' : '');
+    const alertCfg = configs.find((c) => c.kind === 'alerts');
+    const s = alertCfg ? alertCfg.settings : {};
+    return `<h1>Creator dashboard</h1>
+${flash ? `<p class="notice">${esc(flash)}</p>` : ''}${errorBox(error)}
+<section class="grid">
+  <div class="card"><h2>Totals</h2>
+    <p class="big">${n(totals.settled_via_billing)} <small>Vibes settled through Billing</small></p>
+    <p>${n(totals.external)} Vibes-equivalent tipped on your own PowerChat · ${n(totals.interactions)} tips · ${n(totals.pending)} pending</p>
+    <p class="fine">Simulations (${n(totals.simulations)}) are never counted. Your balance and cash-outs are on OpenVibe.Live until Billing takes over.</p>
+  </div>
+  <div class="card"><h2>Your page</h2>
+    <p><a href="/${esc(p.handle)}">openvibe.tips/${esc(p.handle)}</a> — ${p.page_enabled ? 'on and indexable' : 'off (only you can see it)'}</p>
+    <form method="post" action="/dashboard/profile">${hidden({ csrf, idem: `${idem}-p` })}
+      <label><input type="checkbox" name="page_enabled" value="1"${f('page_enabled')}> Public page on (search engines may index it)</label>
+      <label><input type="checkbox" name="accepting" value="1"${f('accepting')}> Accepting tips</label>
+      <label>Headline <input type="text" name="headline" maxlength="280" value="${esc(p.headline || '')}"></label>
+      <label>Minimum tip <input type="number" name="min_amount" min="1" value="${p.min_amount}"></label>
+      <label>Minimum paid message <input type="number" name="paid_message_min" min="1" value="${p.paid_message_min}"></label>
+      <label><input type="checkbox" name="tts_enabled" value="1"${f('tts_enabled')}> Text-to-speech</label>
+      <label>Minimum for text-to-speech <input type="number" name="tts_min_amount" min="1" value="${p.tts_min_amount}"></label>
+      <label>Text-to-speech length <input type="number" name="tts_max_chars" min="20" max="1200" value="${p.tts_max_chars}"></label>
+      <label>Default voice <select name="tts_voice">${VOICES.map((v) => `<option${v === p.tts_voice ? ' selected' : ''}>${v}</option>`).join('')}</select></label>
+      <label><input type="checkbox" name="media_requests_enabled" value="1"${f('media_requests_enabled')}> Media requests</label>
+      <label>Minimum media request <input type="number" name="media_request_min" min="1" value="${p.media_request_min}"></label>
+      <label>Longest media (seconds) <input type="number" name="media_max_seconds" min="10" max="10800" value="${p.media_max_seconds}"></label>
+      <input type="hidden" name="revision" value="${p.revision}">
+      <button class="btn" type="submit">Save</button>
+    </form>
+  </div>
+</section>
+<section class="card"><h2>Goals</h2>
+  ${goals.length ? goals.map((g) => `${goalCard(g)}${g.status === 'active' ? `<form class="inline" method="post" action="/dashboard/goals/${esc(g.id)}">${hidden({ csrf, idem: `${idem}-g-${g.id}`, revision: g.revision })}
+    <label>Title <input name="title" maxlength="120" value="${esc(g.title)}"></label><label>Target <input type="number" name="target_amount" min="1" value="${g.target_amount}"></label>
+    <button class="btn ghost" type="submit">Update</button></form>
+    <form class="inline" method="post" action="/dashboard/goals/${esc(g.id)}/close">${hidden({ csrf, idem: `${idem}-c-${g.id}` })}<button class="btn ghost" type="submit">Close goal</button></form>` : ''}`).join('') : '<p>No goals yet.</p>'}
+  <form method="post" action="/dashboard/goals">${hidden({ csrf, idem: `${idem}-ng` })}
+    <h3>New goal</h3>
+    <label>Title <input name="title" maxlength="120" required></label>
+    <label>Target (Vibes) <input type="number" name="target_amount" min="1" required></label>
+    <label>Description <input name="description" maxlength="1000"></label>
+    <button class="btn" type="submit">Add goal</button>
+  </form>
+</section>
+<section class="card"><h2>Overlays</h2>
+  <p>Add an overlay to OBS as a Browser Source. Each overlay link carries its own token: it shows alerts and goals, nothing else, and you can revoke it at any time. ${connected ? `<b>${connected}</b> overlay${connected === 1 ? '' : 's'} connected now.` : 'No overlay is connected right now.'}</p>
+  ${tokens.length ? `<table class="list"><thead><tr><th>Label</th><th>Shows</th><th>Created</th><th>Last used</th><th></th></tr></thead><tbody>${tokens.map((t) => `<tr${t.active ? '' : ' class="revoked"'}><td>${esc(t.label || '—')}</td><td>${esc(t.scopes.join(', '))}</td><td>${when(t.created_at)}</td><td>${when(t.last_used_at) || 'never'}</td><td>${t.active ? `<form method="post" action="/dashboard/overlay-tokens/${esc(t.id)}/revoke">${hidden({ csrf, idem: `${idem}-r-${t.id}` })}<button class="btn ghost" type="submit">Revoke</button></form>` : 'revoked'}</td></tr>`).join('')}</tbody></table>` : ''}
+  <form method="post" action="/dashboard/overlay-tokens">${hidden({ csrf, idem: `${idem}-t` })}
+    <label>Label <input name="label" maxlength="80" placeholder="OBS main scene"></label>
+    <label><input type="checkbox" name="scope_alerts" value="1" checked> Alerts</label>
+    <label><input type="checkbox" name="scope_goals" value="1" checked> Goals</label>
+    <button class="btn" type="submit">Create overlay link</button>
+  </form>
+  ${alertCfg ? `<form method="post" action="/dashboard/overlay-configs/${esc(alertCfg.id)}">${hidden({ csrf, idem: `${idem}-a`, revision: alertCfg.revision })}
+    <h3>Alert settings</h3>
+    <label>Show alerts from <input type="number" name="min_amount" min="1" value="${s.min_amount}"> Vibes</label>
+    <label>Alert time (ms) <input type="number" name="duration_ms" min="1000" max="60000" value="${s.duration_ms}"></label>
+    <label><input type="checkbox" name="show_message" value="1"${s.show_message ? ' checked' : ''}> Show the message</label>
+    <label><input type="checkbox" name="speak_message" value="1"${s.speak_message ? ' checked' : ''}> Read text-to-speech requests in the overlay (browser voice)</label>
+    <label>Sound (https link) <input type="url" name="sound_url" value="${esc(s.sound_url || '')}"></label>
+    <label>Image (https link) <input type="url" name="image_url" value="${esc(s.image_url || '')}"></label>
+    <input type="hidden" name="show_amount" value="1">
+    <button class="btn ghost" type="submit">Save alert settings</button>
+  </form>` : ''}
+</section>
+<section class="card"><h2>Test your setup</h2>
+  <p>Runs the whole path — overlay alert, goal widget, delivery — marked as a simulation. Nothing is charged and nothing is counted. ${chatAdapter === 'none' ? '' : 'Chat delivery of simulations stays inside Tips.'}</p>
+  <form method="post" action="/dashboard/simulate">${hidden({ csrf, idem: `${idem}-s` })}
+    <label>Kind <select name="kind"><option value="tip">Tip</option><option value="paid_message">Paid message</option>${p.tts_enabled ? '<option value="tts">Text-to-speech</option>' : ''}${p.media_requests_enabled ? '<option value="media_request">Media request</option>' : ''}</select></label>
+    <label>Amount <input type="number" name="amount" min="1" value="${Math.max(p.min_amount, p.paid_message_min, 100)}"></label>
+    <label>Name <input name="supporter_name" value="Test supporter" maxlength="80"></label>
+    <label>Message <input name="message" value="This is a test alert" maxlength="300"></label>
+    <label class="when-media">Media link (for a media request) <input type="url" name="media_url" placeholder="https://www.youtube.com/watch?v=…"></label>
+    <button class="btn" type="submit">Send a test</button>
+  </form>
+</section>
+<section class="card"><h2>Recent</h2>
+  ${recent.length ? `<table class="list"><thead><tr><th>When</th><th>From</th><th>What</th><th class="num">Vibes</th><th>Payment</th><th>Delivery</th></tr></thead><tbody>${recent.map((r) => receiptRow(r, 'creator')).join('')}</tbody></table>` : '<p>Nothing yet.</p>'}
+  ${deliveries.length ? `<details><summary>Overlay deliveries</summary><table class="list"><thead><tr><th>#</th><th>Kind</th><th>Status</th><th>Sent</th><th>Created</th></tr></thead><tbody>${deliveries.map((d) => `<tr${d.test ? ' class="test"' : ''}><td>${d.seq}</td><td>${esc(d.kind)}${d.test ? ' (test)' : ''}</td><td>${esc(d.status)}</td><td>${d.sends}×</td><td>${when(d.created_at)}</td></tr>`).join('')}</tbody></table></details>` : ''}
+</section>`;
+}
+
+function tokenCreated({ out }) {
+    return `<h1>Overlay link created</h1>
+<p class="notice">Copy it now: this is the only time it is shown. Anyone with the link can see your alerts and goals (nothing else), so treat it like a password and revoke it if it leaks.</p>
+<p><label>Overlay URL (OBS Browser Source, 800 × 600, transparent)<input class="copy" type="text" readonly value="${esc(out.overlay_url)}" onclick="this.select()"></label></p>
+<p><a class="btn" href="/dashboard">Back to the dashboard</a></p>`;
+}
+
+function errorPage({ status, title, message }) {
+    return `<section class="card"><h1>${esc(title)}</h1><p>${esc(message)}</p><p><a href="/">OpenVibe.Tips home</a></p></section><!-- ${status} -->`;
+}
+
+module.exports = { home, creatorPage, goalsPage, receiptsPage, receiptPage, dashboard, tokenCreated, errorPage, tipForm };

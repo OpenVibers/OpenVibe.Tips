@@ -1,0 +1,232 @@
+diff --git a/server/index.js b/server/index.js
+index 4bba504..63c0969 100644
+--- a/server/index.js
++++ b/server/index.js
+@@ -564,6 +564,8 @@ app.get('/internal/analytics-summary', (req, res) => {
+ const chatLiveContext = require('./chat/live-context-routes');
+ app.use('/internal/chat-context', chatLiveContext.contextRouter);
+ app.use('/internal/chat-effects', chatLiveContext.effectsRouter);
++// OpenVibe.Tips announces settled tips in the creator's chat here (service token, live.tips_delivery.write).
++app.use('/internal/tips', require('./tips/delivery-routes'));
+ app.use('/internal', require('./internal/routes'));
+ 
+ 
+diff --git a/server/tips/delivery-routes.js b/server/tips/delivery-routes.js
+new file mode 100644
+index 0000000..ff08b97
+--- /dev/null
++++ b/server/tips/delivery-routes.js
+@@ -0,0 +1,108 @@
++'use strict';
++/**
++ * OpenVibe.Tips → Live: announce a settled tip in the creator's Live chat (Tips' live-chat
++ * delivery adapter, roadmap Wave 9). The money already moved in OpenVibe.Billing; this route only
++ * does what the tail of POST /api/funds/donate does after the balance changed.
++ *
++ *   POST /internal/tips/deliveries      capability live.tips_delivery.write (Network service token,
++ *                                       audience openvibe.live; loopback-only like every /internal route)
++ *   Idempotency-Key: <interaction id>:<effect>   a repeat answers the first result and does nothing
++ *   body { delivery_id, effect, test, creator: { type, id: usr_… }, supporter: { name, subject? },
++ *          interaction: { id, kind, amount, currency, message }, text, tts?: { text, voice },
++ *          media?: { url }, highlight_seconds?, target?: { service: 'live', type: 'stream', id } }
++ *   → 200 { ok: true, ref }   404 creator has no Live channel (permanent)   409 not live (retried)
++ *
++ *   chat_line | paid_message  donation event to the channel room + global, saved as a 'donation'
++ *                             chat message (metadata.source 'tips'), the donation alert sound
++ *   tts                       synthesizeAndBroadcastTTS on the live stream (or the offline channel room)
++ *   media_request             into the media queue at cost 0 — Billing charged it, Tips holds the record
++ */
++const express = require('express');
++const db = require('../db/database');
++const { guard } = require('../net/service-guard');
++
++const router = express.Router();
++const done = new Map();   // Idempotency-Key → response (Tips retries within minutes; bounded)
++const SUBJECT_RE = /^usr_[0-9A-HJKMNP-TV-Z]{26}$/;
++
++function channelUserId(subject) {
++    if (!SUBJECT_RE.test(String(subject || ''))) return null;
++    const row = db.getDb().prepare("SELECT user_id FROM linked_accounts WHERE service = 'network' AND subject_id = ? ORDER BY id DESC LIMIT 1").get(subject);
++    return row ? row.user_id : null;
++}
++
++function streamIdFor(target, userId) {
++    if (target && target.service === 'live' && target.type === 'stream') {
++        const s = db.getStreamById(Number(target.id));
++        if (s && s.user_id === userId && s.is_live) return s.id;
++    }
++    const live = db.getStreamByUserId(userId);
++    return live ? live.id : null;
++}
++
++function remember(key, out) {
++    done.set(key, out);
++    if (done.size > 5000) done.delete(done.keys().next().value);
++    return out;
++}
++
++router.post('/deliveries', guard('live.tips_delivery.write'), express.json({ limit: '32kb' }), async (req, res) => {
++    const key = String(req.get('idempotency-key') || '');
++    if (!/^[A-Za-z0-9_:.-]{8,200}$/.test(key)) return res.status(400).json({ error: 'Idempotency-Key required' });
++    if (done.has(key)) return res.json(done.get(key));
++    const b = req.body || {};
++    const i = b.interaction || {};
++    const userId = channelUserId(b.creator && b.creator.id);
++    if (!userId) return res.status(404).json({ error: 'this creator has no Live channel' });
++    const chatServer = require('../chat/chat-server');
++    const streamId = streamIdFor(b.target, userId);
++    const name = String((b.supporter && b.supporter.name) || 'Someone').slice(0, 80);
++    const amount = Math.max(0, Math.round(Number(i.amount) || 0));
++    const message = String(i.message || '').slice(0, 500);
++    try {
++        if (b.effect === 'chat_line' || b.effect === 'paid_message') {
++            const event = {
++                type: 'donation', username: name, user_id: null, avatar_url: null, amount, message, timestamp: new Date().toISOString(),
++                source: 'tips', paid_message: b.effect === 'paid_message', highlight_seconds: Number(b.highlight_seconds) || 0,
++            };
++            chatServer.broadcastToChannelRoom(userId, streamId, event);
++            try { chatServer.broadcastGlobal({ ...event, global: true, channel_user_id: userId }); } catch { /* non-critical */ }
++            const saved = db.saveChatMessage({
++                stream_id: streamId, channel_user_id: userId, user_id: null, username: name,
++                message: String(b.text || `${name} tipped ${amount.toLocaleString()} Vibes${message ? ': ' + message : ''}`).slice(0, 1000),
++                message_type: 'donation',
++                metadata: { kind: 'donation', amount, message, username: name, source: 'tips', interaction_id: i.id || null, paid_message: event.paid_message, highlight_seconds: event.highlight_seconds, test: !!b.test },
++            });
++            require('../monetization/alerts').playAlertSound(chatServer, userId, streamId, 'donation');
++            return res.json(remember(key, { ok: true, ref: { chat_message_id: saved && saved.lastInsertRowid != null ? Number(saved.lastInsertRowid) : null } }));
++        }
++        if (b.effect === 'tts') {
++            const text = String((b.tts && b.tts.text) || '').slice(0, 1200);
++            if (!text) return res.status(422).json({ error: 'no text' });
++            await chatServer.synthesizeAndBroadcastTTS(streamId, name, text, null, 'tips', `tips:${i.id}`, userId, `tips-${i.id}`);
++            return res.json(remember(key, { ok: true, ref: { stream_id: streamId } }));
++        }
++        if (b.effect === 'media_request') {
++            const mq = require('../media/media-queue');
++            const settings = mq.getSettings(userId);
++            const normalized = await mq.normalizeInput(String((b.media && b.media.url) || ''), settings);
++            const max = Number(settings.max_duration_seconds) || 600;
++            if (Number.isFinite(normalized.duration_seconds) && normalized.duration_seconds > max) return res.status(422).json({ error: `longer than ${max} seconds` });
++            const r = db.createMediaRequest({
++                streamer_id: userId, stream_id: streamId, user_id: null, username: name, input: String(b.media.url),
++                canonical_url: normalized.canonical_url, embed_url: normalized.embed_url, provider: normalized.provider, title: normalized.title,
++                thumbnail_url: normalized.thumbnail_url, duration_seconds: normalized.duration_seconds,
++                // Paid through OpenVibe.Billing and recorded by OpenVibe.Tips: Live charges nothing here.
++                cost: 0, currency: 'free', queue_position: db.getMediaRequestMaxQueuePosition(userId) + 1,
++            });
++            mq.broadcastQueueUpdate(userId);
++            return res.json(remember(key, { ok: true, ref: { media_request_id: Number(r.lastInsertRowid) } }));
++        }
++        return res.status(422).json({ error: `unknown effect ${b.effect}` });
++    } catch (err) {
++        console.warn('[Tips delivery]', b.effect, err.message);
++        return res.status(422).json({ error: err.message });
++    }
++});
++
++module.exports = router;
+diff --git a/test/tips-delivery.test.js b/test/tips-delivery.test.js
+new file mode 100644
+index 0000000..2c3730a
+--- /dev/null
++++ b/test/tips-delivery.test.js
+@@ -0,0 +1,99 @@
++'use strict';
++
++// OpenVibe.Tips → Live (roadmap Wave 9): POST /internal/tips/deliveries announces a settled tip in the
++// creator's chat — service token with live.tips_delivery.write, idempotent per delivery id, the
++// creator found by Network subject, no Live balance touched.
++
++const assert = require('assert');
++const fs = require('fs');
++const os = require('os');
++const path = require('path');
++const http = require('http');
++const crypto = require('crypto');
++const express = require('express');
++const { serviceAuth } = require('openvibe-contracts');
++
++const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ov-tips-delivery-'));
++const keys = crypto.generateKeyPairSync('rsa', { modulusLength: 2048, publicKeyEncoding: { type: 'spki', format: 'pem' }, privateKeyEncoding: { type: 'pkcs8', format: 'pem' } });
++fs.writeFileSync(path.join(tmp, 'network.pem'), keys.publicKey);
++fs.mkdirSync(path.join(tmp, 'sounds'));
++process.env.DB_PATH = path.join(tmp, 'live.db');
++process.env.OV_NETWORK_PUBLIC_KEY = path.join(tmp, 'network.pem');
++process.env.OV_NETWORK_URL = 'https://openvibe.network';
++process.env.SOUNDS_PATH = path.join(tmp, 'sounds');
++console.log = () => {};
++console.warn = () => {};
++
++const ISS = 'https://openvibe.network';
++const SUBJECT = 'usr_01J0000000000000000000000Z';
++const now = () => Math.floor(Date.now() / 1000);
++let jti = 0;
++const token = (cap, aud = 'openvibe.live') => serviceAuth.signServiceToken({ iss: ISS, sub: 'svc:tips', actor_type: 'service', aud: [aud], cap, iat: now(), exp: now() + 300, jti: `tok_tips_${++jti}` }, keys.privateKey);
++
++(async () => {
++    const db = require('../server/db/database');
++    db.initDb();
++    const d = db.getDb();
++    d.prepare("INSERT INTO users (id, username, display_name, password_hash, openvibe_bucks_balance, openvibe_bucks_cashout_balance) VALUES (501, 'alex', 'Alex', 'x', 0, 0)").run();
++    d.prepare("INSERT INTO linked_accounts (user_id, service, service_user_id, subject_id) VALUES (501, 'network', '77', ?)").run(SUBJECT);
++
++    const chatServer = require('../server/chat/chat-server');
++    const broadcasts = [];
++    chatServer.broadcastToChannelRoom = (uid, sid, ev) => broadcasts.push({ uid, sid, ev });
++    chatServer.broadcastGlobal = () => {};
++    const tts = [];
++    chatServer.synthesizeAndBroadcastTTS = async (...a) => { tts.push(a); };
++
++    const app = express();
++    app.use('/internal/tips', require('../server/tips/delivery-routes'));
++    const server = await new Promise((r) => { const s = http.createServer(app); s.listen(0, '127.0.0.1', () => r(s)); });
++    const base = `http://127.0.0.1:${server.address().port}`;
++    const post = (body, { cap = ['live.tips_delivery.write'], key = 'tint_1:chat_line', headers = {} } = {}) => fetch(`${base}/internal/tips/deliveries`, {
++        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token(cap)}`, 'Idempotency-Key': key, ...headers }, body: JSON.stringify(body),
++    }).then(async (r) => ({ status: r.status, json: await r.json().catch(() => null) }));
++
++    const job = {
++        delivery_id: 'tint_1:chat_line', effect: 'chat_line', test: false, creator: { type: 'user', id: SUBJECT },
++        supporter: { name: 'Viewer' }, interaction: { id: 'tint_1', kind: 'tip', amount: 250, currency: 'vibes-bits', message: 'gg' },
++        text: 'Viewer tipped 250 Vibes: gg',
++    };
++
++    assert.strictEqual((await post(job, { cap: ['live.chat_effects.write'] })).status, 403, 'needs live.tips_delivery.write');
++    assert.strictEqual((await post(job, { headers: { 'X-Forwarded-For': '1.2.3.4' } })).status, 403, 'loopback only');
++
++    const a = await post(job);
++    assert.strictEqual(a.status, 200);
++    assert.ok(a.json.ref.chat_message_id > 0);
++    assert.strictEqual(broadcasts.length, 1);
++    assert.strictEqual(broadcasts[0].uid, 501);
++    assert.strictEqual(broadcasts[0].ev.type, 'donation');
++    assert.strictEqual(broadcasts[0].ev.amount, 250);
++    const saved = d.prepare("SELECT * FROM chat_messages WHERE message_type = 'donation'").get();
++    assert.strictEqual(saved.message, 'Viewer tipped 250 Vibes: gg');
++    assert.strictEqual(JSON.parse(saved.metadata).source, 'tips');
++
++    // A retry of the same delivery changes nothing.
++    const b = await post(job);
++    assert.deepStrictEqual(b.json, a.json);
++    assert.strictEqual(broadcasts.length, 1);
++    assert.strictEqual(d.prepare("SELECT COUNT(*) AS n FROM chat_messages WHERE message_type = 'donation'").get().n, 1);
++
++    // TTS on the (offline) channel room.
++    const t = await post({ ...job, effect: 'tts', tts: { text: 'read me', voice: 'gary' } }, { key: 'tint_1:tts' });
++    assert.strictEqual(t.status, 200);
++    assert.strictEqual(tts[0][2], 'read me');
++    assert.strictEqual(tts[0][6], 501);
++
++    // Unknown creator: permanent refusal.
++    const u = await post({ ...job, creator: { type: 'user', id: 'usr_01J0000000000000000000000Y' } }, { key: 'tint_2:chat_line' });
++    assert.strictEqual(u.status, 404);
++
++    // No Live balance moved.
++    const user = d.prepare('SELECT openvibe_bucks_balance, openvibe_bucks_cashout_balance FROM users WHERE id = 501').get();
++    assert.deepStrictEqual(user, { openvibe_bucks_balance: 0, openvibe_bucks_cashout_balance: 0 });
++    assert.strictEqual(d.prepare("SELECT COUNT(*) AS n FROM transactions").get().n, 0);
++
++    server.close();
++    process.stdout.write('tips-delivery: all passed\n');
++    process.exit(0);
++})().catch((e) => { process.stderr.write(`${e.stack}\n`); process.exit(1); });

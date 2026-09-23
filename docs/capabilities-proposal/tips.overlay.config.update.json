@@ -1,0 +1,20 @@
+{
+  "id": "tips.overlay.config.update",
+  "version": "1.0",
+  "owner": "tips",
+  "status": "active",
+  "visibility": "first-party",
+  "description": "Create or change a creator's overlay configs; open overlays receive the change at once.",
+  "permissions": [
+    "tips:overlays"
+  ],
+  "resourceConstraints": [
+    "owner"
+  ],
+  "quotaClass": "standard",
+  "events": [],
+  "implementedBy": [
+    "POST /api/v1/overlay-configs",
+    "PATCH /api/v1/overlay-configs/:id"
+  ]
+}

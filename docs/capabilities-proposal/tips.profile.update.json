@@ -1,0 +1,19 @@
+{
+  "id": "tips.profile.update",
+  "version": "1.0",
+  "owner": "tips",
+  "status": "active",
+  "visibility": "first-party",
+  "description": "Create or update a creator's tip profile on their behalf: page switch (indexing), accepting, minimums, TTS and media-request settings. Creators do this themselves with their user token.",
+  "permissions": [
+    "tips:profile"
+  ],
+  "resourceConstraints": [
+    "owner"
+  ],
+  "quotaClass": "standard",
+  "events": [],
+  "implementedBy": [
+    "PATCH /api/v1/profiles/:creator"
+  ]
+}

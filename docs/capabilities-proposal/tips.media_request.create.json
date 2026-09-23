@@ -1,0 +1,21 @@
+{
+  "id": "tips.media_request.create",
+  "version": "1.0",
+  "owner": "tips",
+  "status": "active",
+  "visibility": "first-party",
+  "description": "Start a paid media request for a supporter (allowed hosts, the creator's minimum and length); queued with the media-queue owner only after settlement.",
+  "permissions": [
+    "tips:checkout"
+  ],
+  "resourceConstraints": [
+    "owner"
+  ],
+  "quotaClass": "payments",
+  "events": [
+    "tips.interaction.ready"
+  ],
+  "implementedBy": [
+    "POST /api/v1/media-requests"
+  ]
+}

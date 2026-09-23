@@ -1,0 +1,19 @@
+{
+  "id": "live.tips_delivery.write",
+  "version": "1.0",
+  "owner": "live",
+  "status": "active",
+  "visibility": "internal",
+  "description": "OpenVibe.Tips' live-chat adapter: announce a settled tip in the creator's Live chat (donation line, paid message, TTS, media request at no charge). Owned by Live (docs/live-patch.diff adds the route); proposed here for Live's manifest.",
+  "permissions": [
+    "live:chat"
+  ],
+  "resourceConstraints": [
+    "none"
+  ],
+  "quotaClass": "standard",
+  "events": [],
+  "implementedBy": [
+    "POST /internal/tips/deliveries"
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "name": "openvibe-tips",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenVibe.Tips — creator support on the OpenVibe network: tips, goals, paid messages, TTS and media requests, and overlays. Billing moves the money; Tips owns the interaction.",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "NODE_ENV=development node server/index.js",
+    "test": "node test/run.js",
+    "subscribe": "node scripts/subscribe.js",
+    "import-live": "node scripts/import-live.js"
+  },
+  "keywords": ["openvibe", "tips", "overlays", "creator"],
+  "author": "OpenVibers",
+  "license": "AGPL-3.0-only",
+  "repository": "github:OpenVibers/OpenVibe.Tips",
+  "dependencies": {
+    "better-sqlite3": "^11.10.0",
+    "cookie-parser": "^1.4.7",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "openvibe-contracts": "https://codeload.github.com/OpenVibers/OpenVibe.Contracts/tar.gz/refs/tags/v0.11.0",
+    "openvibe-sdk": "https://codeload.github.com/OpenVibers/OpenVibe.SDK/tar.gz/refs/tags/v0.2.2",
+    "openvibe-shared": "https://codeload.github.com/OpenVibers/OpenVibe.Shared/tar.gz/refs/tags/v1.2.1"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

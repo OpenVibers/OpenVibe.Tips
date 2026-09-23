@@ -1,0 +1,48 @@
+[Unit]
+Description=OpenVibe.Tips — creator support: tips, goals, paid messages, TTS and media requests, overlays
+# Network signs the tokens Tips verifies (its key is fetched at boot and retried); Billing moves
+# the money; Events carries Billing's settlements in and Tips' events out. Tips starts without any
+# of them: pages and overlays keep working, payments wait.
+After=network.target
+Wants=openvibe-network.service openvibe-billing.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/openvibe.tips
+EnvironmentFile=/etc/openvibe/tips.env
+Environment=NODE_ENV=production
+Environment=PORT=4610
+Environment=HOST=127.0.0.1
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env node /opt/openvibe.tips/server/index.js
+Restart=always
+RestartSec=5
+# Tips' own database (ADR-007: one database per service); the code tree stays read-only.
+StateDirectory=openvibe-tips
+StateDirectoryMode=0700
+Environment=TIPS_DB_PATH=/var/lib/openvibe-tips/tips.db
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

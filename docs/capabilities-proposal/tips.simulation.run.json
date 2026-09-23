@@ -1,0 +1,19 @@
+{
+  "id": "tips.simulation.run",
+  "version": "1.0",
+  "owner": "tips",
+  "status": "active",
+  "visibility": "first-party",
+  "description": "Run the full effect path (overlay alert, goal widget, delivery) flagged test, with no Billing call, never counted in any total and never emitted as a durable event. The charter's 'tips.simulate' as a 3-segment id.",
+  "permissions": [
+    "tips:simulate"
+  ],
+  "resourceConstraints": [
+    "owner"
+  ],
+  "quotaClass": "standard",
+  "events": [],
+  "implementedBy": [
+    "POST /api/v1/simulate"
+  ]
+}

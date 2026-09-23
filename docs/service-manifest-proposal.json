@@ -1,0 +1,51 @@
+{
+  "version": "0.2.0",
+  "contractRanges": {
+    "openvibe-contracts": ">=0.11.0 <1.0.0"
+  },
+  "id": "tips",
+  "name": "OpenVibe.Tips",
+  "status": "alpha",
+  "repository": "OpenVibers/OpenVibe.Tips",
+  "domains": [
+    "openvibe.tips"
+  ],
+  "publicOrigin": "https://openvibe.tips",
+  "health": "/api/health",
+  "ready": "/api/ready",
+  "capabilities": [
+    "tips.profile.get",
+    "tips.profile.update",
+    "tips.checkout.create",
+    "tips.superchat.create",
+    "tips.tts.request",
+    "tips.media_request.create",
+    "tips.interaction.get",
+    "tips.interaction.list",
+    "tips.interaction.record",
+    "tips.goal.create",
+    "tips.goal.update",
+    "tips.goal.close",
+    "tips.overlay.token.create",
+    "tips.overlay.token.revoke",
+    "tips.overlay.config.get",
+    "tips.overlay.config.update",
+    "tips.simulation.run"
+  ],
+  "eventsProduced": [
+    "tips.interaction.ready",
+    "tips.interaction.failed",
+    "tips.interaction.cancelled",
+    "tips.goal.updated",
+    "tips.overlay.delivered",
+    "tips.overlay.failed"
+  ],
+  "eventsConsumed": [
+    "billing.transaction.settled",
+    "billing.transaction.reversed"
+  ],
+  "namespacesOwned": [
+    "tips.*"
+  ],
+  "notes": "Creator support (roadmap Wave 9): tip interactions whose payment state mirrors OpenVibe.Billing (keyed by Billing transaction id) and whose delivery state is Tips' own; goals derived from settled interactions; paid messages, TTS and media requests created on settlement; scoped revocable overlay tokens with SSE overlays; simulation mode. Tips never moves money (ADR-012). Alpha: the placeholder on OpenVibe.Sites stays until the launch rule in README.md holds. Proposed manifest; replaces the placeholder in manifests/services/tips.json."
+}

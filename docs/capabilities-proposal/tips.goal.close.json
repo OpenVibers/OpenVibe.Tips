@@ -1,0 +1,21 @@
+{
+  "id": "tips.goal.close",
+  "version": "1.0",
+  "owner": "tips",
+  "status": "active",
+  "visibility": "first-party",
+  "description": "Close a goal; its history stays.",
+  "permissions": [
+    "tips:goals"
+  ],
+  "resourceConstraints": [
+    "owner"
+  ],
+  "quotaClass": "standard",
+  "events": [
+    "tips.goal.updated"
+  ],
+  "implementedBy": [
+    "POST /api/v1/goals/:id/close"
+  ]
+}
