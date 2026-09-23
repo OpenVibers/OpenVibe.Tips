@@ -14,8 +14,5 @@ jobs:
           cache: npm
       - run: npm ci --no-audit --no-fund
       - run: npm test
-      # The tips manifest in openvibe-contracts is still the charter placeholder and the tips.*
-      # capabilities are proposals (docs/), so this check cannot pass until the lead releases them
-      # in a contracts version. Remove continue-on-error in that release.
       - run: npx openvibe-contracts-check --service tips --src server
-        continue-on-error: true
+        
