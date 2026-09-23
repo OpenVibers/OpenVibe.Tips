@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openvibe.network/contracts/events/payloads/tips.interaction.erased.v1.json",
+  "title": "TipsInteractionErasedPayload",
+  "description": "tips.interaction.erased v1 (OpenVibe.Tips server/domain/interactions.js erase). The supporter erased their data from this interaction: Tips no longer holds their subject, name, message, text-to-speech text, media link or checkout reference; the money record (amount, creator, Billing transaction, goal contribution) stays so Billing's books and the creator's totals still reconcile. payload.redacts names every earlier Tips event about the interaction, so OpenVibe.Events tombstones them (ADR-026). Envelope: subject { type: interaction, id: tint_… }, visibility internal, priority important, actor service:tips. Carries no supporter data. Never emitted for simulations.",
+  "type": "object",
+  "required": ["interaction_id", "creator", "erased_at", "redacts"],
+  "additionalProperties": false,
+  "properties": {
+    "interaction_id": { "type": "string", "pattern": "^tint_[0-9A-HJKMNP-TV-Z]{26}$" },
+    "creator": { "$ref": "../../identity/subject-ref.v1.json" },
+    "erased_at": { "type": "string", "format": "date-time" },
+    "redacts": {
+      "$ref": "../redaction-directive.v1.json",
+      "description": "{ subject_type: interaction, subject_ids: [interaction_id] }."
+    }
+  }
+}

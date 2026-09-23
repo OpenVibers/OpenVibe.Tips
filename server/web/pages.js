@@ -18,12 +18,18 @@ function hidden(fields) {
     return Object.entries(fields).map(([k, v]) => `<input type="hidden" name="${esc(k)}" value="${esc(v)}">`).join('');
 }
 
+/** A goal: full (the dashboard) or its public shape (amounts null when the creator hides them). */
 function goalCard(g) {
+    const amounts = g.current_amount != null;
+    const bar = amounts ? `aria-valuemin="0" aria-valuemax="${g.target_amount}" aria-valuenow="${g.current_amount}"` : `aria-valuemin="0" aria-valuemax="100" aria-valuenow="${g.percent}"`;
+    const supporters = Array.isArray(g.supporters) && g.supporters.length
+        ? `<ul class="supporters">${g.supporters.map((x) => `<li>${esc(x.name)}${x.amount != null ? ` <small>${n(x.amount)} Vibes</small>` : ''}</li>`).join('')}</ul>` : '';
     return `<article class="goal${g.reached ? ' reached' : ''}">
   <h3>${esc(g.title)}</h3>
   ${g.description ? `<p>${esc(g.description)}</p>` : ''}
-  <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="${g.target_amount}" aria-valuenow="${g.current_amount}"><span style="width:${g.percent}%"></span></div>
-  <p class="meta">${n(g.current_amount)} of ${n(g.target_amount)} Vibes · ${g.percent}%${g.reached ? ' · reached' : ''}${g.status === 'closed' ? ' · closed' : ''}</p>
+  <div class="bar" role="progressbar" ${bar}><span style="width:${g.percent}%"></span></div>
+  <p class="meta">${amounts ? `${n(g.current_amount)} of ${n(g.target_amount)} Vibes · ` : ''}${g.percent}%${g.reached ? ' · reached' : ''}${g.status === 'closed' ? ' · closed' : ''}</p>
+  ${supporters}
 </article>`;
 }
 
@@ -73,8 +79,13 @@ function tipForm({ profile, goals, viewer, csrf, idem, values = {}, providers, e
     ${providers.length ? `<label><input type="radio" name="pay_with" value="checkout"${values.pay_with === 'checkout' ? ' checked' : ''}> Checkout (${providers.map(esc).join(', ')}) <small>buys exactly these Vibes and gives them</small></label>` : ''}
   </fieldset>
   <label>Show my name as <input type="text" name="supporter_name" maxlength="80" value="${esc(values.supporter_name || (viewer ? viewer.name || viewer.username || '' : ''))}"></label>
+  <fieldset class="privacy"><legend>Privacy</legend>
+    <label><input type="checkbox" name="anonymous" value="1"${values.anonymous ? ' checked' : ''}> Send anonymously <small>(everyone, ${esc(profile.display_name)} included, sees "Anonymous")</small></label>
+    <label><input type="checkbox" name="hide_amount" value="1"${values.hide_amount ? ' checked' : ''}> Hide the amount <small>(${esc(profile.display_name)} still sees it; a goal bar still moves by it)</small></label>
+    <label class="when-tip"><input type="checkbox" name="private_message" value="1"${values.private_message ? ' checked' : ''}> Keep my message private <small>(a tip only: ${esc(profile.display_name)} reads it, it is not shown on stream or on this site)</small></label>
+  </fieldset>
   <button type="submit" class="btn">${viewer ? 'Send' : 'Sign in to send'}</button>
-  <p class="fine">Tips are final once paid. Your receipt shows the payment and delivery status separately.</p>
+  <p class="fine">Tips are final once paid. Your receipt shows the payment and delivery status separately. You can download or erase your tips data from your <a href="/receipts">receipts</a>.</p>
 </form>`;
 }
 
@@ -84,7 +95,7 @@ function creatorPage({ profile, goals, viewer, csrf, idem, values, providers, er
 <section class="creator-head">
   ${profile.avatar_url ? `<img class="avatar" src="${esc(profile.avatar_url)}" alt="" width="96" height="96">` : ''}
   <div><h1>${esc(profile.display_name)}</h1>${profile.headline ? `<p class="headline">${esc(profile.headline)}</p>` : ''}
-  <p class="links"><a href="https://openvibe.live/${esc(profile.handle)}">Watch on OpenVibe.Live</a> · <a href="/${esc(profile.handle)}/goals">Goals</a></p></div>
+  <p class="links"><a href="https://openvibe.live/${esc(profile.handle)}">Watch on OpenVibe.Live</a> · <a href="/${esc(profile.handle)}/goals">Goals</a>${profile.page.supporters_page ? ` · <a href="/${esc(profile.handle)}/supporters">Supporters</a>` : ''}</p></div>
 </section>
 ${active.length ? `<section><h2>Goals</h2>${active.map(goalCard).join('')}</section>` : ''}
 ${tipForm({ profile, goals, viewer, csrf, idem, values, providers, error })}`;
@@ -94,7 +105,22 @@ function goalsPage({ profile, goals }) {
     return `<h1>${esc(profile.display_name)} — goals</h1>
 <p><a href="/${esc(profile.handle)}">Back to ${esc(profile.display_name)}</a></p>
 ${goals.length ? goals.map(goalCard).join('') : '<p>No goals yet.</p>'}
-<p class="fine">Goal totals count settled payments only.</p>`;
+<p class="fine">Goal totals count settled payments only.${profile.page.goal_supporters ? ' Supporters are listed as they chose to be shown.' : ''}</p>`;
+}
+
+/** openvibe.tips/<handle>/supporters: what the creator chose to show, as each supporter allowed. */
+function supportersPage({ profile, leaderboard, recent }) {
+    const page = profile.page;
+    const board = leaderboard.length
+        ? `<ol class="leaderboard">${leaderboard.map((r) => `<li><span>${esc(r.name)}</span>${r.total != null ? ` <small>${n(r.total)} Vibes</small>` : ''}</li>`).join('')}</ol>`
+        : '<p>No supporters to show yet.</p>';
+    const wall = recent && recent.length
+        ? `<section><h2>Recent messages</h2><ul class="wall">${recent.map((v) => `<li><b>${esc(v.supporter_name)}</b>${v.amount != null ? ` <small>${n(v.amount)} Vibes</small>` : ''}<p>${esc(v.message)}</p><small>${when(v.at)}</small></li>`).join('')}</ul></section>` : '';
+    return `<h1>${esc(profile.display_name)} — supporters</h1>
+<p><a href="/${esc(profile.handle)}">Back to ${esc(profile.display_name)}</a></p>
+<section><h2>Top supporters</h2>${board}</section>
+${page.supporters_messages ? wall || '<p>No public messages yet.</p>' : ''}
+<p class="fine">Anonymous tips and tips with a hidden amount are not on this list.</p>`;
 }
 
 function receiptRow(i, as) {
@@ -102,10 +128,34 @@ function receiptRow(i, as) {
     return `<tr${i.test ? ' class="test"' : ''}><td><a href="/receipts/${esc(i.id)}">${when(i.created_at)}</a></td><td>${who}</td><td>${esc(KIND_LABEL[i.kind])}${i.test ? ' <small>(simulation)</small>' : ''}</td><td class="num">${n(i.amount)}</td><td>${esc(PAY_LABEL[i.payment.state])}</td><td>${esc(DELIVERY_LABEL[i.delivery.state])}</td></tr>`;
 }
 
-function receiptsPage({ rows, next }) {
+function privacyLine(p) {
+    if (!p) return '';
+    const parts = [p.anonymous && 'sent anonymously', p.hide_amount && 'amount hidden', p.private_message && 'message private'].filter(Boolean);
+    return parts.length ? esc(parts.join(' · ')) : '';
+}
+
+function receiptsPage({ rows, next, flash }) {
     return `<h1>Your receipts</h1>
+${flash ? `<p class="notice">${esc(flash)}</p>` : ''}
 ${rows.length ? `<table class="list"><thead><tr><th>When</th><th>Creator</th><th>What</th><th class="num">Vibes</th><th>Payment</th><th>Delivery</th></tr></thead><tbody>${rows.map((r) => receiptRow(r, 'supporter')).join('')}</tbody></table>` : '<p>No tips yet.</p>'}
-${next ? `<p><a href="/receipts?cursor=${esc(next)}">Older</a></p>` : ''}`;
+${next ? `<p><a href="/receipts?cursor=${esc(next)}">Older</a></p>` : ''}
+<section class="card"><h2>Your data</h2>
+  <p><a class="btn ghost" href="/receipts/export">Download your tips (JSON)</a></p>
+  <p><a href="/receipts/erase">Erase your data from your tips</a> <small>— your name and messages are removed; the payment record stays with the amount, because Billing's books and the creators' totals must add up.</small></p>
+</section>`;
+}
+
+function erasePage({ csrf, idem, pending, count }) {
+    return `<h1>Erase your data from your tips</h1>
+<section class="card">
+  <p>This removes you from the ${n(count)} tip${count === 1 ? '' : 's'} you sent on OpenVibe.Tips: your account, the name you showed, your messages, text-to-speech text and media links. They then read "Anonymous" everywhere, including overlays, and you no longer see them in your receipts. It cannot be undone.</p>
+  <p>What stays: the amount, the creator, the date and the OpenVibe.Billing reference of each payment, because Billing's books and the creators' totals must still add up. Billing keeps its own payment records; ask Billing about those.</p>
+  ${pending ? `<p class="notice">${n(pending)} tip${pending === 1 ? ' is' : 's are'} still waiting for payment and will be kept until the payment settles or fails; erase again afterwards.</p>` : ''}
+  <form method="post" action="/receipts/erase">${hidden({ csrf, idem })}
+    <label><input type="checkbox" name="confirm" value="1" required> I understand this cannot be undone</label>
+    <button class="btn" type="submit">Erase my data</button>
+  </form>
+</section>`;
 }
 
 function receiptPage({ i, profile, as, cancelled }) {
@@ -116,6 +166,7 @@ ${cancelled && i.payment.state === 'pending' ? '<p class="notice">Checkout was c
   <dt>Creator</dt><dd>${profile ? `<a href="/${esc(profile.handle)}">${esc(profile.display_name)}</a>` : 'unknown'}</dd>
   <dt>From</dt><dd>${esc(i.supporter_name || 'Someone')}</dd>
   <dt>What</dt><dd>${esc(KIND_LABEL[i.kind])}${i.test ? ' (simulation, not charged, not counted)' : ''}</dd>
+  ${privacyLine(i.privacy) ? `<dt>Privacy</dt><dd>${privacyLine(i.privacy)}</dd>` : ''}
   <dt>Amount</dt><dd>${n(i.amount)} Vibes</dd>
   ${i.message ? `<dt>Message</dt><dd>${esc(i.message)}</dd>` : ''}
   ${i.tts ? `<dt>Read out</dt><dd>${esc(i.tts.text)} <small>(${esc(i.tts.voice)})</small></dd>` : ''}
@@ -158,6 +209,14 @@ ${flash ? `<p class="notice">${esc(flash)}</p>` : ''}${errorBox(error)}
       <label><input type="checkbox" name="media_requests_enabled" value="1"${f('media_requests_enabled')}> Media requests</label>
       <label>Minimum media request <input type="number" name="media_request_min" min="1" value="${p.media_request_min}"></label>
       <label>Longest media (seconds) <input type="number" name="media_max_seconds" min="10" max="10800" value="${p.media_max_seconds}"></label>
+      <fieldset><legend>Public pages</legend>
+        <label><input type="checkbox" name="page_goal_amounts" value="1"${p.page.goal_amounts ? ' checked' : ''}> Goals show their amounts <small>(off: the percentage only)</small></label>
+        <label><input type="checkbox" name="page_goal_supporters" value="1"${p.page.goal_supporters ? ' checked' : ''}> Goals list their latest supporters</label>
+        <label><input type="checkbox" name="page_supporters_page" value="1"${p.page.supporters_page ? ' checked' : ''}> A supporters page with your top supporters</label>
+        <label><input type="checkbox" name="page_supporters_amounts" value="1"${p.page.supporters_amounts ? ' checked' : ''}> Show amounts on the supporters page</label>
+        <label><input type="checkbox" name="page_supporters_messages" value="1"${p.page.supporters_messages ? ' checked' : ''}> Show recent public messages on the supporters page</label>
+        <p class="fine">Each supporter's own choice comes first: anonymous tips read "Anonymous", hidden amounts and private messages are never shown.</p>
+      </fieldset>
       <input type="hidden" name="revision" value="${p.revision}">
       <button class="btn" type="submit">Save</button>
     </form>
@@ -225,4 +284,4 @@ function errorPage({ status, title, message }) {
     return `<section class="card"><h1>${esc(title)}</h1><p>${esc(message)}</p><p><a href="/">OpenVibe.Tips home</a></p></section><!-- ${status} -->`;
 }
 
-module.exports = { home, creatorPage, goalsPage, receiptsPage, receiptPage, dashboard, tokenCreated, errorPage, tipForm };
+module.exports = { home, creatorPage, goalsPage, supportersPage, receiptsPage, erasePage, receiptPage, dashboard, tokenCreated, errorPage, tipForm };

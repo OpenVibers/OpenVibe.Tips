@@ -48,4 +48,13 @@ function idempotent(db, now) {
     };
 }
 
-module.exports = { idempotent, stable, principalKey };
+/**
+ * Stored answers are kept for a week: long enough for any client retry, and no longer, since they
+ * carry messages and subjects (a supporter's erasure removes theirs at once).
+ */
+const RETAIN_MS = 7 * 24 * 3600 * 1000;
+function pruneAnswers(db, now = Date.now(), retainMs = RETAIN_MS) {
+    return db.prepare('DELETE FROM api_idempotency WHERE created_at < ?').run(new Date(now - retainMs).toISOString()).changes;
+}
+
+module.exports = { idempotent, stable, principalKey, pruneAnswers, RETAIN_MS };

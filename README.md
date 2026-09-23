@@ -111,14 +111,16 @@ token as a Bearer and act on their own things only. The API never reads cookies.
 | `GET /profiles/:creator` | `tips.profile.get` (switched-off pages) | anyone when the page is on; the owner |
 | `PATCH /profiles/:creator` (`me` creates it) | `tips.profile.update` | owner |
 | `GET /profiles/:creator/totals` | `tips.interaction.list` | owner |
-| `POST /checkout` `{creator, amount, message?, goal_id?, pay_with: credit\|checkout, provider?, supporter (services), target?}` | `tips.checkout.create` | the supporter |
+| `POST /checkout` `{creator, amount, message?, goal_id?, pay_with: credit\|checkout, provider?, supporter (services), target?, privacy?}` | `tips.checkout.create` | the supporter |
 | `POST /paid-messages` | `tips.superchat.create` | the supporter |
 | `POST /tts-requests` `{…, tts: {text, voice}}` | `tips.tts.request` | the supporter |
 | `POST /media-requests` `{…, media: {url}}` | `tips.media_request.create` | the supporter |
 | `GET /interactions/:id` | `tips.interaction.get` | its creator or supporter |
 | `GET /interactions?creator=\|supporter=&cursor=` | `tips.interaction.list` | own receipts; `?as=creator` own tips |
 | `POST /interactions/external` `{creator, provider, provider_ref, amount_cents, supporter_name?, message?, announce?}` | `tips.interaction.record` | — |
-| `GET /goals?creator=`, `GET /goals/:id` | `tips.goal.update` (private) | public when the page is on; owner sees contributions |
+| `GET /goals?creator=`, `GET /goals/:id` | `tips.goal.update` (private; full view) | public shape when the page is on (the creator's page settings); owner sees contributions |
+| `GET /profiles/:creator/supporters` | `tips.profile.get` (while not public) | public when the creator shows the supporters page; the owner |
+| `GET /me/export`, `POST /me/erase` | — (people only) | the supporter's own tips: download; erase their data from them |
 | `POST /goals`, `PATCH /goals/:id`, `POST /goals/:id/close` | `tips.goal.create` / `.update` / `.close` | owner |
 | `GET\|POST /overlay-tokens`, `POST /overlay-tokens/:id/revoke` | `tips.overlay.token.create` / `.revoke` | owner |
 | `GET /overlay-configs[/:id]`, `POST /overlay-configs`, `PATCH /overlay-configs/:id` | `tips.overlay.config.get` / `.update` | owner |
@@ -133,12 +135,47 @@ contracts' `capabilities.grants()` (exact id or a `.*` family). Tips pins openvi
 which also carries the payload schemas of the six `tips.*` events below; `test/contracts.test.js`
 validates every envelope and payload Tips produces against them.
 
+## Privacy
+
+What a supporter lets the public see is their choice, per tip (`privacy: { anonymous, hide_amount,
+private_message }` on the API, three boxes on the tip form), stored on the interaction
+([server/domain/privacy.js](server/domain/privacy.js)):
+
+| Choice | Overlays, chat lines, public pages, other products | The creator | Events (internal) |
+|---|---|---|---|
+| `anonymous` | "Anonymous", no subject | "Anonymous", no subject | `supporter: null`, `supporter_name: "Anonymous"` |
+| `hide_amount` | no amount (`amount: null`, the line reads "sent a tip"); off the leaderboard | the amount (their money) | the amount (goals and reconciliation need it) |
+| `private_message` (tips only) | no message | the message | no message is ever in an event |
+
+Only the supporter (their receipts, `GET /me/export`) and Billing (which moved the money) can link an
+anonymous tip to them. `publicView()` is the one shape that leaves Tips for the public: overlay alert
+payloads, chat jobs (which also carry `privacy`), the supporters and goals pages, and the `public` block
+of every API answer. A goal bar still moves by a hidden amount, so the goal update of such a tip names
+nobody.
+
+**What the creator's public pages show** is theirs to choose (`page` on the profile, the dashboard's
+*Public pages*): goal amounts or the percentage only, each goal's latest supporters, and a supporters
+page (`/<handle>/supporters`, off by default) with the top supporters, their totals and recent public
+messages. The leaderboard counts only tips whose supporter kept both name and amount public.
+
+**Export and erasure.** `GET /me/export` (and `/receipts/export`) downloads everything Tips holds about a
+supporter's tips. `POST /me/erase` (and `/receipts/erase`, with a confirmation) removes the person from
+every settled, failed or reversed tip — subject, name, message, TTS text, media link, checkout reference,
+stored API answers, overlay payloads, unsent events — and keeps the money record (amount, creator, date,
+Billing transaction, goal contribution), so Billing's books and the creators' totals still reconcile.
+Tips still waiting for their payment are kept until it settles or fails. Each erased interaction emits
+`tips.interaction.erased`, whose `redacts` has OpenVibe.Events tombstone Tips' earlier events about it.
+Stored API answers (Idempotency-Key replays) are pruned after a week.
+
 ## Events
 
 Produced through the openvibe-sdk outbox (table `event_outbox`, source `tips`, same transaction as the
 change; relayed when `EVENTS_URL` and the client secret are set): `tips.interaction.ready`,
 `tips.interaction.failed`, `tips.interaction.cancelled`, `tips.goal.updated`, `tips.overlay.delivered`,
-`tips.overlay.failed`. Simulations and Billing test money produce none. Consumed:
+`tips.overlay.failed`, and `tips.interaction.erased` (a supporter's erasure; payload
+`{ interaction_id, creator, erased_at, redacts }`, schema proposed in
+[docs/events-proposal/](docs/events-proposal/) — not yet in openvibe-contracts). Simulations and Billing
+test money produce none. An anonymous supporter is never named in an event. Consumed:
 `billing.transaction.settled`, `billing.transaction.reversed`, `billing.receipt.external` (only from source
 `billing`). `billing.receipt.external` (payload: `streamer` SubjectRef, `amount_cents`, `value_bits`,
 `donor_name` — null when `anonymous` — `message`, `provider`, `provider_event_id`, `app_purpose`/`app_ref`,
@@ -165,7 +202,11 @@ retries). `live-chat` posts to Live's `/internal/tips/deliveries` with Tips' ser
 `openvibe.live`, `live.tips_delivery.write`), `Idempotency-Key = <interaction>:<effect>`; Live does what
 `POST /api/funds/donate` does after the money moved (channel + global broadcast, a `donation` chat
 message, the alert sound), TTS through `synthesizeAndBroadcastTTS`, media requests into its queue at no
-charge. The route came from [docs/live-patch.diff](docs/live-patch.diff) and is deployed in Live since
+charge. A job carries the interaction's public view and `privacy`: "Anonymous" and no subject for an
+anonymous supporter, `interaction.amount: null` and a line without the amount when it is hidden, no
+private message. (Live's route turns a null amount into a `donation` event of 0 Vibes, which its chat
+renders as "donated 0 Vibes"; it should render an amount-less line when `privacy.hide_amount` is set.)
+The route came from [docs/live-patch.diff](docs/live-patch.diff) and is deployed in Live since
 `f11f809` (its idempotency record is in memory only); nothing calls it yet. `test`
 records jobs in memory (development; simulations always use it). `none` (the production default) creates
 no chat effects, and it is what production runs. When OpenVibe.Chat publishes a paid-message capability, a `chat` adapter replaces
@@ -175,7 +216,8 @@ no chat effects, and it is what production runs. When OpenVibe.Chat publishes a 
 
 `/` · `/<handle>` (goals + tip form posting to checkout; `index,follow` only when the creator switched the
 page on, otherwise 404 for everyone else and a `noindex` preview for the creator) · `/<handle>/goals` ·
-`/receipts`, `/receipts/:id` (payment and delivery shown separately) · `/dashboard` (page settings,
+`/<handle>/supporters` (when the creator shows it) · `/receipts`, `/receipts/:id` (payment and delivery
+shown separately, with the privacy chosen), `/receipts/export`, `/receipts/erase` · `/dashboard` (page settings, public pages,
 goals, overlay links shown once, alert settings, simulation, totals, recent tips, overlay deliveries) ·
 `/robots.txt`, `/sitemap.xml` (switched-on pages only) · `/release.json` · `/terms`, `/privacy`, `/dmca`.
 Signed-in forms carry an HMAC anti-forgery token and a per-render nonce. Shared chrome: Network
@@ -207,6 +249,7 @@ a copy of Billing's database for the links and totals:
 | creator totals reconcile exactly to Billing | `test/import.test.js` (fixtures in Live's schema and Billing's importer keys; a Billing donation Tips never saw is reported, then reconciles once its event arrives); `test/api.test.js` (totals = the stub Billing payable) |
 | simulation never counted; token revocation immediate; goals from settled only; reversal keeps the delivery record | `test/overlays.test.js`, `test/api.test.js`, `test/settlement.test.js` |
 | an EXTERNAL PowerChat tip Billing announced is celebrated once: Live chat line, overlay, goal; never Billing money | `test/external.test.js` (redelivery and republish, same key as `POST /interactions/external`, Tips and Live goal ids, anonymous, test receipts, malformed payloads) |
+| a supporter's privacy holds everywhere; the creator chooses what public pages show; export and erasure keep the books reconciled | `test/privacy.test.js` (anonymous / hidden amount / private message across API, overlays, chat jobs, pages and events; goal and supporters page settings; export; erasure scrubs rows, overlay payloads, stored answers and unsent events, emits `tips.interaction.erased`, totals still equal Billing) |
 
 ## What waits
 

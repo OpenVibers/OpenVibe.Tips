@@ -20,7 +20,8 @@
  *   migration_maps          legacy (Live) row → Tips entity, with held/excluded reasons
  *
  * Supporting: overlay_tokens (hashed, scoped, revocable), api_idempotency, import_runs,
- * event_outbox + idempotency_receipts (openvibe-sdk outbox and inbox), settings.
+ * event_outbox + idempotency_receipts (openvibe-sdk outbox and inbox), settings. Columns added after
+ * v1 are in COLUMNS below.
  */
 const fs = require('fs');
 const path = require('path');
@@ -257,7 +258,30 @@ CREATE TABLE IF NOT EXISTS api_idempotency (
 );
 `;
 
-const SCHEMA_VERSION = 1;
+/**
+ * Columns added after schema v1, for new and existing databases alike (ALTER TABLE … ADD COLUMN when
+ * missing; idempotent, never rewrites a row).
+ *
+ *   v2  privacy: what the supporter lets the public see of an interaction (server/domain/privacy.js),
+ *       their erasure, and what the creator's public goal and supporters pages show
+ */
+const COLUMNS = [
+    ['tip_interactions', 'anonymous', 'INTEGER NOT NULL DEFAULT 0'],          // name shown as "Anonymous" to everyone but the supporter
+    ['tip_interactions', 'hide_amount', 'INTEGER NOT NULL DEFAULT 0'],        // amount left out of overlays, chat lines, public pages
+    ['tip_interactions', 'private_message', 'INTEGER NOT NULL DEFAULT 0'],    // a tip's message is for the creator only
+    ['tip_interactions', 'erased_at', 'TEXT'],                                // the supporter erased their data from it
+    ['creator_tip_profiles', 'page_settings', "TEXT NOT NULL DEFAULT '{}'"],  // JSON: what the public goal / supporters pages show
+];
+
+const SCHEMA_VERSION = 2;
+
+function addColumns(db) {
+    const have = new Map();
+    for (const [table, name, def] of COLUMNS) {
+        if (!have.has(table)) have.set(table, new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name)));
+        if (!have.get(table).has(name)) { db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${def}`); have.get(table).add(name); }
+    }
+}
 
 function openDb(file) {
     if (file !== ':memory:') fs.mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
@@ -266,8 +290,10 @@ function openDb(file) {
     db.pragma('foreign_keys = ON');
     db.pragma('busy_timeout = 5000');
     db.exec(SCHEMA);
+    db.transaction(() => addColumns(db))();
     db.prepare('INSERT OR IGNORE INTO settings (id, schema_version, created_at) VALUES (1, ?, ?)').run(SCHEMA_VERSION, new Date().toISOString());
+    db.prepare('UPDATE settings SET schema_version = ? WHERE id = 1 AND schema_version < ?').run(SCHEMA_VERSION, SCHEMA_VERSION);
     return db;
 }
 
-module.exports = { openDb, SCHEMA_VERSION };
+module.exports = { openDb, SCHEMA_VERSION, COLUMNS };

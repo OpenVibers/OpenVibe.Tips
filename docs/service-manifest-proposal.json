@@ -38,7 +38,8 @@
     "tips.interaction.cancelled",
     "tips.goal.updated",
     "tips.overlay.delivered",
-    "tips.overlay.failed"
+    "tips.overlay.failed",
+    "tips.interaction.erased"
   ],
   "eventsConsumed": [
     "billing.transaction.settled",

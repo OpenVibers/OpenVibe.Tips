@@ -27,6 +27,12 @@
  * | GET  /overlay-configs[/:id]            | tips.overlay.config.get      | owner                               |
  * | POST /overlay-configs, PATCH …/:id     | tips.overlay.config.update   | owner                               |
  * | POST /simulate                         | tips.simulation.run          | owner                               |
+ * | GET  /profiles/:creator/supporters     | tips.profile.get (page off)  | anyone when the page shows it; owner|
+ * | GET  /me/export, POST /me/erase        | —                            | the supporter's own tips            |
+ *
+ * Paid requests take `privacy: { anonymous, hide_amount, private_message }` (server/domain/privacy.js).
+ * Goals and supporters are answered in their public shape (the creator's page settings) to anyone
+ * but the creator and granted services.
  */
 const express = require('express');
 const { http } = require('openvibe-contracts');
@@ -87,8 +93,31 @@ function v1Router({ domain, apiAuth }) {
         // A page that is switched off does not exist for anyone but its creator and granted services.
         if (!p.page_enabled && !mine && !svc) fail(404, 'tips.creator_not_found', 'no tip profile for this creator');
         const owner = mine || svc;
-        res.json({ profile: profiles.present(p, { owner }), goals: goals.list(p.creator_subject, { status: 'active' }).map((g) => goals.present(g)) });
+        const active = goals.list(p.creator_subject, { status: 'active' });
+        res.json({ profile: profiles.present(p, { owner }), goals: active.map((g) => (owner ? goals.present(g) : goals.publicGoal(g, p.page))) });
     }));
+
+    /** The supporters page: top supporters and recent public messages, as the creator chose to show them. */
+    r.get('/profiles/:creator/supporters', wrap((req, res) => {
+        const p = creatorOf(req, req.params.creator);
+        const who = req.principal;
+        const owner = (who.kind === 'user' && who.subject === p.creator_subject) || (who.kind === 'service' && apiAuth.granted(who, CAP.profileGet));
+        if (!owner && (!p.page_enabled || !p.page.supporters_page)) fail(404, 'tips.supporters_not_public', 'this creator does not show their supporters');
+        const page = p.page;
+        res.json({
+            creator: { type: 'user', id: p.creator_subject }, page,
+            leaderboard: interactions.leaderboard(p.creator_subject).map((row) => (page.supporters_amounts ? row : { ...row, total: null })),
+            recent: page.supporters_messages ? interactions.recentPublic(p.creator_subject).map((v) => (page.supporters_amounts ? v : { ...v, amount: null })) : null,
+        });
+    }));
+
+    // ── The supporter's own data ─────────────────────────────
+    const person = (req) => {
+        if (req.principal.kind !== 'user') fail(req.principal.kind === 'anonymous' ? 401 : 403, req.principal.kind === 'anonymous' ? 'token.missing' : 'tips.people_only', 'only the person themselves (a Network user token) can do this');
+        return req.principal.subject;
+    };
+    r.get('/me/export', wrap((req, res) => res.json(interactions.exportFor(person(req)))));
+    r.post('/me/erase', ...write((req, res) => res.json(interactions.erase(person(req)))));
 
     r.patch('/profiles/:creator', ...write((req, res) => {
         const b = req.body || {};
@@ -210,18 +239,20 @@ function v1Router({ domain, apiAuth }) {
         const p = req.principal;
         return (p.kind === 'user' && p.subject === g.creator_subject) || (p.kind === 'service' && apiAuth.granted(p, CAP.goalUpdate));
     }
+    const goalOwner = (req, creator) => (req.principal.kind === 'user' && req.principal.subject === creator) || (req.principal.kind === 'service' && apiAuth.granted(req.principal, CAP.goalUpdate));
     r.get('/goals', wrap((req, res) => {
         const profile = creatorOf(req, req.query.creator);
         const sample = { creator_subject: profile.creator_subject };
         if (!goalVisible(req, sample)) fail(404, 'tips.creator_not_found', 'no tip profile for this creator');
         const status = ['active', 'closed'].includes(req.query.status) ? req.query.status : undefined;
-        res.json({ goals: goals.list(profile.creator_subject, { status }).map((g) => goals.present(g)) });
+        const full = goalOwner(req, profile.creator_subject);
+        res.json({ goals: goals.list(profile.creator_subject, { status }).map((g) => (full ? goals.present(g) : goals.publicGoal(g, profile.page))) });
     }));
     r.get('/goals/:id', wrap((req, res) => {
         const g = goals.get(req.params.id);
         if (!g || !goalVisible(req, g)) fail(404, 'tips.goal_not_found', 'no such goal');
-        const mine = (req.principal.kind === 'user' && req.principal.subject === g.creator_subject) || req.principal.kind === 'service';
-        res.json({ goal: goals.present(g, { contributions: mine }) });
+        if (!goalOwner(req, g.creator_subject)) return res.json({ goal: goals.publicGoal(g, profiles.bySubject(g.creator_subject).page) });
+        res.json({ goal: goals.present(g, { contributions: true }) });
     }));
     r.post('/goals', ...write((req, res) => {
         const b = req.body || {};

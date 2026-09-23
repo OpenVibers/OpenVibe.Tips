@@ -14,10 +14,16 @@
  * delivery window becomes `failed` (tips.overlay.failed). A reconnect with Last-Event-ID
  * REPLAYS rows after that id: replay only writes bytes to a socket — it never charges, never
  * re-counts a goal, never emits another event. Simulated (test) rows are flagged and emit nothing.
+ *
+ * An alert's payload is the interaction's publicView() (privacy.js): an anonymous supporter reads
+ * "Anonymous", a hidden amount is null, a private message is absent. refreshInteraction() rewrites
+ * the stored payloads when that view changes (an erasure), so a replay or /state never shows the
+ * old one.
  */
 const crypto = require('crypto');
 const { fail, iso, prefixedId, sha256, json, text } = require('../util');
 const { safeUrl } = require('./profiles');
+const { publicView, publicName } = require('./privacy');
 
 const SCOPES = ['alerts', 'goals'];
 const TOKEN_RE = /^tovl_[A-Za-z0-9_-]{43}$/;
@@ -155,13 +161,21 @@ function createOverlays(ctx) {
     }
 
     /** Inside the settlement transaction (or a simulation). */
-    function addAlert(interaction, view) {
-        const payload = {
-            interaction_id: interaction.id, kind: interaction.kind, amount: interaction.amount, currency: interaction.currency,
-            supporter_name: interaction.supporter_name || 'Someone', message: view.message, tts: view.tts || null,
-            media: view.media || null, settlement: interaction.settlement, test: !!interaction.test, at: iso(ctx.now()),
-        };
+    function addAlert(interaction) {
+        const payload = publicView(interaction, { at: iso(ctx.now()) });
         return insertDelivery(interaction.creator_subject, 'alert', { interactionId: interaction.id, payload, test: interaction.test, dedupe: `alert:${interaction.id}` });
+    }
+
+    /**
+     * Inside a transaction: the interaction's public view changed. Its alert payload is rewritten, and
+     * the goal updates it caused no longer name anyone.
+     */
+    function refreshInteraction(interaction) {
+        for (const row of db.prepare('SELECT seq, kind, payload FROM overlay_deliveries WHERE interaction_id = ?').all(interaction.id)) {
+            const old = json(row.payload, {});
+            const payload = row.kind === 'alert' ? publicView(interaction, { at: old.at }) : { ...old, by: interaction.hide_amount ? null : publicName(interaction) };
+            db.prepare('UPDATE overlay_deliveries SET payload = ? WHERE seq = ?').run(JSON.stringify(payload), row.seq);
+        }
     }
 
     function addGoalDelivery(creator, goalView, { reason, interactionId, by, dedupe, test = false }) {
@@ -216,7 +230,11 @@ function createOverlays(ctx) {
         client.lastSeq = Math.max(client.lastSeq, row.seq);
         if (!client.scopes.includes(scopeOf(row.kind))) return;
         const payload = json(row.payload, {});
-        if (row.kind === 'alert' && client.minAmount && payload.amount < client.minAmount && !row.test) return;
+        if (row.kind === 'alert' && client.minAmount && !row.test) {
+            // A hidden amount is not in the payload; the threshold still applies to the real one.
+            const amount = payload.amount != null ? payload.amount : (db.prepare('SELECT amount FROM tip_interactions WHERE id = ?').get(row.interaction_id) || {}).amount;
+            if (amount < client.minAmount) return;
+        }
         if (!write(client, row.kind, row.seq, { delivery_id: row.id, seq: row.seq, ...payload })) return;
         db.prepare('UPDATE overlay_deliveries SET sends = sends + 1 WHERE seq = ?').run(row.seq);
         if (row.status === 'pending') markDelivered(row);
@@ -299,7 +317,7 @@ function createOverlays(ctx) {
     return {
         SCOPES, createToken, getToken, listTokens, authenticate, revokeToken, presentToken,
         getConfig, listConfigs, createConfig, updateConfig, presentConfig,
-        addAlert, addGoalDelivery, sweepFailed, attach, detach, closeToken, notify, connected, closeAll, recentDeliveries,
+        addAlert, refreshInteraction, addGoalDelivery, sweepFailed, attach, detach, closeToken, notify, connected, closeAll, recentDeliveries,
     };
 }
 

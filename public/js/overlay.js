@@ -11,6 +11,7 @@
     var queue = [];
     var busy = false;
     var shown = {};
+    var HIDDEN = { tip: 'sent a tip', paid_message: 'sent a paid message', tts: 'sent a message to read out', media_request: 'requested media' };
 
     function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
     function fmt(n) { try { return Number(n).toLocaleString('en-US'); } catch (e) { return String(n); } }
@@ -38,7 +39,8 @@
         if (s.image_url) { var img = el('img'); img.src = s.image_url; img.alt = ''; box.appendChild(img); }
         if (a.test) box.appendChild(el('div', 'test', 'test alert'));
         var title = el('div', 'title');
-        var tpl = String(s.template || '{name} tipped {amount} Vibes');
+        // A supporter who hid the amount: the server sends none, and the line does not pretend one.
+        var tpl = a.amount == null ? '{name} ' + (HIDDEN[a.kind] || HIDDEN.tip) : String(s.template || '{name} tipped {amount} Vibes');
         var parts = tpl.split(/(\{name\}|\{amount\})/);
         parts.forEach(function (p) {
             if (p === '{name}') title.appendChild(el('b', null, a.supporter_name || 'Someone'));

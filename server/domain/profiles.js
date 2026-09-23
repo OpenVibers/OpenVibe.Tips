@@ -7,8 +7,16 @@
  *
  * page_enabled is the creator's switch for the public page at openvibe.tips/<handle>: while it is
  * off the page answers 404 to everyone else and nothing about it is indexable.
+ *
+ * page_settings (JSON, `page` in the API) is what the public pages show, each supporter's own
+ * privacy choices applying on top (privacy.js):
+ *   goal_amounts         goal amounts (off: a goal shows its percentage only)
+ *   goal_supporters      the latest supporters of each goal
+ *   supporters_page      openvibe.tips/<handle>/supporters: the top supporters
+ *   supporters_amounts   each top supporter's total, and amounts in the recent list
+ *   supporters_messages  recent public messages on the supporters page
  */
-const { fail, iso, text } = require('../util');
+const { fail, iso, text, json } = require('../util');
 
 const HANDLE_RE = /^[a-z0-9][a-z0-9_.-]{0,39}$/;
 // Paths the site itself uses; no creator page can take them.
@@ -21,10 +29,19 @@ function normalizeHandle(v) {
     return HANDLE_RE.test(h) && !RESERVED.has(h) ? h : null;
 }
 
+const PAGE_DEFAULTS = Object.freeze({ goal_amounts: true, goal_supporters: false, supporters_page: false, supporters_amounts: false, supporters_messages: false });
+
+function pageSettings(raw) {
+    const stored = json(raw, {});
+    const out = {};
+    for (const k of Object.keys(PAGE_DEFAULTS)) out[k] = typeof stored[k] === 'boolean' ? stored[k] : PAGE_DEFAULTS[k];
+    return out;
+}
+
 function parse(row) {
     if (!row) return null;
     const b = (k) => !!row[k];
-    return { ...row, page_enabled: b('page_enabled'), accepting: b('accepting'), tts_enabled: b('tts_enabled'), media_requests_enabled: b('media_requests_enabled') };
+    return { ...row, page_enabled: b('page_enabled'), accepting: b('accepting'), tts_enabled: b('tts_enabled'), media_requests_enabled: b('media_requests_enabled'), page: pageSettings(row.page_settings) };
 }
 
 function createProfiles(ctx) {
@@ -89,6 +106,14 @@ function createProfiles(ctx) {
             set.tts_voice = String(patch.tts_voice);
         }
         if (patch.headline !== undefined) set.headline = text(patch.headline, 'headline', 280);
+        if (patch.page !== undefined) {
+            if (!patch.page || typeof patch.page !== 'object' || Array.isArray(patch.page)) fail(422, 'tips.invalid_input', `page must be an object of ${Object.keys(PAGE_DEFAULTS).join(', ')}`);
+            const unknown = Object.keys(patch.page).filter((k) => !(k in PAGE_DEFAULTS));
+            if (unknown.length) fail(422, 'tips.invalid_input', `page has no setting ${unknown[0]}`);
+            const next = { ...p.page };
+            for (const k of Object.keys(PAGE_DEFAULTS)) if (patch.page[k] !== undefined) next[k] = patch.page[k] === true || patch.page[k] === 'on' || patch.page[k] === '1' || patch.page[k] === 1;
+            set.page_settings = JSON.stringify(next);
+        }
         if (patch.display_name !== undefined) {
             const n = text(patch.display_name, 'display_name', 80);
             if (!n) fail(422, 'tips.invalid_input', 'display_name cannot be empty');
@@ -110,6 +135,8 @@ function createProfiles(ctx) {
             minimums: { tip: p.min_amount, paid_message: p.paid_message_min, tts: p.tts_enabled ? p.tts_min_amount : null, media_request: p.media_requests_enabled ? p.media_request_min : null },
             tts: { enabled: p.tts_enabled, max_chars: p.tts_max_chars, voice: p.tts_voice },
             media_requests: { enabled: p.media_requests_enabled, max_seconds: p.media_max_seconds },
+            page: p.page,
+            supporters_url: p.page.supporters_page ? `${ctx.config.baseUrl}/${p.handle}/supporters` : null,
             currency: 'vibes-bits',
         };
         if (owner) Object.assign(out, { revision: p.revision, created_at: p.created_at, updated_at: p.updated_at });
@@ -124,4 +151,4 @@ function safeUrl(u) {
     try { const x = new URL(String(u)); return x.protocol === 'https:' ? x.toString().slice(0, 500) : null; } catch { return null; }
 }
 
-module.exports = { createProfiles, normalizeHandle, RESERVED, VOICES, safeUrl };
+module.exports = { createProfiles, normalizeHandle, RESERVED, VOICES, safeUrl, PAGE_DEFAULTS, pageSettings };

@@ -7,8 +7,11 @@
  *   GET  /dashboard                 creator dashboard (sign-in; opens the profile on first visit)
  *   POST /dashboard/…               profile, goals, overlay tokens/configs, simulation (anti-forgery token)
  *   GET  /receipts, /receipts/:id   the signed-in supporter's receipts (a creator may open theirs too)
+ *   GET  /receipts/export           the supporter's tips as a JSON download
+ *   GET|POST /receipts/erase        erase the supporter's data from their tips (confirmation, anti-forgery token)
  *   GET  /:handle                   creator page: goals + tip form (indexable only when the page is on)
- *   GET  /:handle/goals             goals
+ *   GET  /:handle/goals             goals (as the creator chose to show them)
+ *   GET  /:handle/supporters        top supporters and recent public messages, when the creator shows them
  *   POST /:handle/tip               the no-JS tip form → Billing (credit or checkout)
  *   GET  /overlay/:token            the overlay page for OBS (token = scoped, revocable, never a cookie)
  *   GET  /overlay/:token/events     SSE: alerts and goal updates (Last-Event-ID resumes/replays)
@@ -21,8 +24,10 @@ const { TipsError, json: parseJson } = require('../util');
 const { viewerMiddleware } = require('./session');
 const pages = require('./pages');
 const { esc, asset } = require('./layout');
+const { PAGE_DEFAULTS } = require('../domain/profiles');
 
 const FLASH = new Set(['Saved', 'Page settings saved', 'Goal added', 'Goal updated', 'Goal closed', 'Overlay link revoked', 'Alert settings saved', 'Test sent — check your overlay']);
+const RECEIPT_FLASH = new Set(['Your data was erased from your tips']);
 
 function createWebRoutes({ domain, config, layout, userAuth }) {
     const r = express.Router();
@@ -49,6 +54,7 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
         });
     }
     const idem = () => `form-${crypto.randomBytes(12).toString('base64url')}`;
+    const bool = (v) => v === '1' || v === 'on' || v === true;
 
     // ── Home, robots, sitemap ────────────────────────────────
     r.get('/', withViewer, (req, res) => {
@@ -71,7 +77,32 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
     r.get('/receipts', withViewer, (req, res) => {
         if (!req.viewer) return res.redirect(`/auth/login?next=${encodeURIComponent('/receipts')}`);
         const out = interactions.list({ supporter: req.viewer.subject, cursor: req.query.cursor, limit: 50 });
-        html(res, pageFor(req, { title: 'Receipts', active: 'receipts', robots: 'noindex,nofollow', canonicalPath: '/receipts', body: pages.receiptsPage({ rows: out.rows.map(decorate), next: out.next_cursor }) }));
+        const flash = RECEIPT_FLASH.has(String(req.query.done || '')) ? String(req.query.done) : null;
+        html(res, pageFor(req, { title: 'Receipts', active: 'receipts', robots: 'noindex,nofollow', canonicalPath: '/receipts', body: pages.receiptsPage({ rows: out.rows.map(decorate), next: out.next_cursor, flash }) }));
+    });
+    // The supporter's own data: a download, and erasure (privacy.js, interactions.erase()).
+    r.get('/receipts/export', withViewer, (req, res) => {
+        if (!req.viewer) return res.redirect(`/auth/login?next=${encodeURIComponent('/receipts')}`);
+        const day = new Date(domain.now()).toISOString().slice(0, 10);
+        res.status(200).set({ 'Cache-Control': 'no-store', 'Content-Disposition': `attachment; filename="openvibe-tips-${day}.json"`, 'X-Robots-Tag': 'noindex, nofollow' })
+            .type('application/json').send(`${JSON.stringify(interactions.exportFor(req.viewer.subject), null, 2)}\n`);
+    });
+    function renderErase(req, res, status = 200) {
+        const rows = db.prepare("SELECT payment_state FROM tip_interactions WHERE supporter_subject = ?").all(req.viewer.subject);
+        html(res, pageFor(req, {
+            title: 'Erase your data', active: 'receipts', robots: 'noindex,nofollow', canonicalPath: '/receipts/erase',
+            body: pages.erasePage({ csrf: csrfFor(req.viewer.subject), idem: idem(), count: rows.length, pending: rows.filter((x) => x.payment_state === 'pending').length }),
+        }), status);
+    }
+    r.get('/receipts/erase', withViewer, (req, res) => {
+        if (!req.viewer) return res.redirect(`/auth/login?next=${encodeURIComponent('/receipts/erase')}`);
+        renderErase(req, res);
+    });
+    r.post('/receipts/erase', withViewer, form, (req, res) => {
+        if (!req.viewer) return res.redirect(303, `/auth/login?next=${encodeURIComponent('/receipts/erase')}`);
+        if (!csrfOk(req) || !bool(req.body.confirm)) return renderErase(req, res, 403);
+        interactions.erase(req.viewer.subject);
+        return res.redirect(303, `/receipts?done=${encodeURIComponent('Your data was erased from your tips')}`);
     });
     r.get('/receipts/:id', withViewer, (req, res) => {
         if (!req.viewer) return res.redirect(`/auth/login?next=${encodeURIComponent(req.originalUrl)}`);
@@ -127,13 +158,13 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
             }
         });
     }
-    const bool = (v) => v === '1' || v === 'on';
     action('/dashboard/profile', (req, p) => {
         const b = req.body;
         profiles.update(p.creator_subject, {
             page_enabled: bool(b.page_enabled), accepting: bool(b.accepting), tts_enabled: bool(b.tts_enabled), media_requests_enabled: bool(b.media_requests_enabled),
             headline: b.headline, min_amount: b.min_amount, paid_message_min: b.paid_message_min, tts_min_amount: b.tts_min_amount, tts_max_chars: b.tts_max_chars,
             tts_voice: b.tts_voice, media_request_min: b.media_request_min, media_max_seconds: b.media_max_seconds,
+            page: Object.fromEntries(Object.keys(PAGE_DEFAULTS).map((k) => [k, bool(b[`page_${k}`])])),
         }, { expectedRevision: b.revision });
         return { done: 'Page settings saved' };
     });
@@ -220,7 +251,8 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
         const owner = !!(p && req.viewer && req.viewer.subject === p.creator_subject);
         if (!p || (!p.page_enabled && !owner)) return notFound(req, res);
         if (p.handle !== String(req.params.handle)) return res.redirect(301, `/${p.handle}`);   // @name, Name → the canonical path
-        const list = goals.list(p.creator_subject).map((g) => goals.present(g));
+        // The page shows what the public sees, for the creator too (a preview); the dashboard has the rest.
+        const list = goals.list(p.creator_subject).map((g) => goals.publicGoal(g, p.page));
         const csrf = req.viewer ? csrfFor(req.viewer.subject) : '';
         const jsonLd = p.page_enabled ? [{ '@context': 'https://schema.org', '@type': 'ProfilePage', name: `${p.display_name} on ${'OpenVibe.Tips'}`, url: `${config.baseUrl}/${p.handle}`, mainEntity: { '@type': 'Person', name: p.display_name, alternateName: p.handle, image: p.avatar_url || undefined } }] : [];
         return html(res, pageFor(req, {
@@ -238,8 +270,22 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
         if (!p.page_enabled && !owner) return notFound(req, res);
         html(res, pageFor(req, {
             title: `${p.display_name} — goals`, canonicalPath: `/${p.handle}/goals`, robots: p.page_enabled ? 'index,follow' : 'noindex,nofollow',
-            body: pages.goalsPage({ profile: p, goals: goals.list(p.creator_subject).map((g) => goals.present(g)) }),
+            body: pages.goalsPage({ profile: p, goals: goals.list(p.creator_subject).map((g) => goals.publicGoal(g, p.page)) }),
         }));
+    });
+    r.get('/:handle/supporters', withViewer, (req, res, next) => {
+        const p = profiles.byHandle(req.params.handle);
+        if (!p) return next();
+        const owner = req.viewer && req.viewer.subject === p.creator_subject;
+        // Off unless the creator shows it; the creator gets a preview while it is off.
+        if ((!p.page_enabled || !p.page.supporters_page) && !owner) return notFound(req, res);
+        const leaderboard = interactions.leaderboard(p.creator_subject).map((row) => (p.page.supporters_amounts ? row : { ...row, total: null }));
+        const recent = p.page.supporters_messages ? interactions.recentPublic(p.creator_subject).map((v) => (p.page.supporters_amounts ? v : { ...v, amount: null })) : null;
+        const indexable = p.page_enabled && p.page.supporters_page;
+        html(res, pageFor(req, {
+            title: `${p.display_name} — supporters`, canonicalPath: `/${p.handle}/supporters`, robots: indexable ? 'index,follow' : 'noindex,nofollow',
+            body: pages.supportersPage({ profile: p, leaderboard, recent }),
+        }), 200, indexable ? {} : { 'X-Robots-Tag': 'noindex, nofollow' });
     });
 
     r.post('/:handle/tip', withViewer, form, async (req, res, next) => {
@@ -247,7 +293,10 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
         if (!p) return next();
         if (!req.viewer) return res.redirect(303, `/auth/login?next=${encodeURIComponent(`/${p.handle}`)}`);
         const b = req.body || {};
-        const values = { kind: b.kind, amount: b.amount, message: b.message, tts_text: b.tts_text, tts_voice: b.tts_voice, media_url: b.media_url, goal_id: b.goal_id, pay_with: b.pay_with, supporter_name: b.supporter_name };
+        const values = {
+            kind: b.kind, amount: b.amount, message: b.message, tts_text: b.tts_text, tts_voice: b.tts_voice, media_url: b.media_url, goal_id: b.goal_id, pay_with: b.pay_with,
+            supporter_name: b.supporter_name, anonymous: bool(b.anonymous), hide_amount: bool(b.hide_amount), private_message: bool(b.private_message),
+        };
         if (!csrfOk(req)) return creatorView(req, res, { values, error: 'That form expired. Please send it again.', status: 403 });
         const owner = req.viewer.subject === p.creator_subject;
         if (!p.page_enabled && !owner) return notFound(req, res);
@@ -257,6 +306,7 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
                 kind: b.kind || 'tip', amount: b.amount, message: b.message, goal_id: b.goal_id || undefined,
                 tts: b.kind === 'tts' ? { text: b.tts_text || b.message, voice: b.tts_voice } : undefined,
                 media: b.kind === 'media_request' ? { url: b.media_url } : undefined,
+                privacy: { anonymous: values.anonymous, hide_amount: values.hide_amount, private_message: values.private_message },
             };
             const funding = b.pay_with === 'checkout' ? 'checkout' : 'credit';
             const { interaction, replay } = interactions.request(p, input, { supporter: req.viewer.subject, supporterName: b.supporter_name || req.viewer.name, funding, idempotencyKey: key });

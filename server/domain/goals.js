@@ -10,9 +10,15 @@
  * no pick, none.
  *
  * Every change bumps the goal's revision and emits tips.goal.updated plus an overlay delivery.
+ *
+ * What the public sees of a goal is the creator's choice (profile page settings): publicGoal()
+ * drops the amounts when goal_amounts is off (the percentage stays) and lists the latest supporters
+ * when goal_supporters is on, each supporter's own privacy applying (an anonymous one reads
+ * "Anonymous", a hidden amount is left out).
  */
 const { fail, iso, prefixedId, text, positiveInt } = require('../util');
 const { safeUrl } = require('./profiles');
+const { publicName } = require('./privacy');
 
 function createGoals(ctx) {
     const { db } = ctx;
@@ -44,8 +50,24 @@ function createGoals(ctx) {
             created_at: g.created_at, updated_at: g.updated_at, closed_at: g.closed_at || null,
         };
         if (contributions) {
-            out.contributions = db.prepare(`SELECT c.interaction_id, c.amount, c.reversed_amount, c.created_at, i.supporter_name
-                FROM tip_goal_contributions c JOIN tip_interactions i ON i.id = c.interaction_id WHERE c.goal_id = ? ORDER BY c.id DESC LIMIT 200`).all(g.id);
+            // The creator's view: amounts always (their money), names as the supporter allowed.
+            out.contributions = db.prepare(`SELECT c.interaction_id, c.amount, c.reversed_amount, c.created_at, i.supporter_name, i.anonymous, i.erased_at
+                FROM tip_goal_contributions c JOIN tip_interactions i ON i.id = c.interaction_id WHERE c.goal_id = ? ORDER BY c.id DESC LIMIT 200`).all(g.id)
+                .map(({ anonymous, erased_at: erasedAt, ...c }) => ({ ...c, supporter_name: publicName({ ...c, anonymous, erased_at: erasedAt }) }));
+        }
+        return out;
+    }
+
+    /** The public shape of a goal under the creator's page settings (`page`, profiles.js). */
+    function publicGoal(g, page) {
+        const out = present(g);
+        if (!out) return null;
+        if (!page.goal_amounts) Object.assign(out, { target_amount: null, current_amount: null, carried_over_amount: null, amounts_hidden: true });
+        if (page.goal_supporters) {
+            out.supporters = db.prepare(`SELECT c.amount - c.reversed_amount AS amount, c.created_at, i.supporter_name, i.anonymous, i.hide_amount, i.erased_at
+                FROM tip_goal_contributions c JOIN tip_interactions i ON i.id = c.interaction_id WHERE c.goal_id = ? AND c.amount > c.reversed_amount
+                ORDER BY c.id DESC LIMIT 10`).all(g.id)
+                .map((c) => ({ name: publicName(c), amount: page.goal_amounts && !c.hide_amount ? c.amount : null, at: c.created_at }));
         }
         return out;
     }
@@ -146,7 +168,9 @@ function createGoals(ctx) {
             .run(g.id, interaction.id, interaction.amount, at, at);
         if (!r.changes) return null;
         const reachedNow = markReached(g.id);
-        return changed(g.id, reachedNow ? 'reached' : 'contribution', { interactionId: interaction.id, by: interaction.supporter_name });
+        // The overlay's goal update names the supporter as the alert does; not when the amount is hidden
+        // (the bar's jump would otherwise pin the amount on them).
+        return changed(g.id, reachedNow ? 'reached' : 'contribution', { interactionId: interaction.id, by: interaction.hide_amount ? null : publicName(interaction) });
     }
 
     /** Inside the reversal transaction: take `bits` back off every goal the interaction counted toward. */
@@ -163,7 +187,7 @@ function createGoals(ctx) {
         return out;
     }
 
-    return { get, list, present, create, update, close, contribute, reverse, pick, totalOf };
+    return { get, list, present, publicGoal, create, update, close, contribute, reverse, pick, totalOf };
 }
 
 module.exports = { createGoals };

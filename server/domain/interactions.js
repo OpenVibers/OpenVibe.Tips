@@ -31,9 +31,16 @@
  * Settlement creates, in one transaction: the paid message / TTS / media request row, the goal
  * contribution, the overlay alert, the delivery effects and tips.interaction.ready. Delivery then
  * runs in the effects worker; its failure never touches payment_state.
+ *
+ * Privacy (privacy.js): the supporter's choices are stored with the interaction (anonymous,
+ * hide_amount, private_message); everything that leaves Tips for the public is publicView(), and
+ * events and answers to anyone but the supporter never name an anonymous supporter. A supporter can
+ * export their tips and erase their data from them (erase(): the money record stays, the person
+ * goes; tips.interaction.erased redacts the earlier events in OpenVibe.Events).
  */
 const { fail, iso, prefixedId, json, positiveInt, text, userSubject, entityRef, displayName } = require('../util');
 const { VOICES } = require('./profiles');
+const { parsePrivacy, publicName, publicView, privacyOf, isAnonymous } = require('./privacy');
 const { BillingCallError } = require('../billing-client');
 
 const KINDS = ['tip', 'paid_message', 'tts', 'media_request'];
@@ -117,15 +124,15 @@ function createInteractions(ctx) {
         const r = {
             supporter_subject: null, supporter_name: null, amount_cents: null, message: null, request: {}, test: 0, billing_txn_id: null,
             billing_intent_id: null, funding_txn_id: null, provider: null, provider_ref: null, legacy_source: null, idempotency_key: null,
-            target: null, origin: 'tips', created_at: at, ...row,
+            target: null, origin: 'tips', anonymous: 0, hide_amount: 0, private_message: 0, created_at: at, ...row,
         };
         db.prepare(`INSERT INTO tip_interactions (id, creator_subject, supporter_subject, supporter_name, kind, amount, amount_cents, message, request,
                 funding, settlement, payment_state, delivery_state, test, billing_txn_id, billing_intent_id, funding_txn_id, provider, provider_ref,
-                legacy_source, idempotency_key, origin, target, created_at, updated_at)
+                legacy_source, idempotency_key, origin, target, anonymous, hide_amount, private_message, created_at, updated_at)
             VALUES (@id, @creator_subject, @supporter_subject, @supporter_name, @kind, @amount, @amount_cents, @message, @request,
                 @funding, @settlement, @payment_state, @delivery_state, @test, @billing_txn_id, @billing_intent_id, @funding_txn_id, @provider, @provider_ref,
-                @legacy_source, @idempotency_key, @origin, @target, @created_at, @created_at)`)
-            .run({ ...r, request: JSON.stringify(r.request || {}), target: r.target ? JSON.stringify(r.target) : null });
+                @legacy_source, @idempotency_key, @origin, @target, @anonymous, @hide_amount, @private_message, @created_at, @created_at)`)
+            .run({ ...r, request: JSON.stringify(r.request || {}), target: r.target ? JSON.stringify(r.target) : null, anonymous: r.anonymous ? 1 : 0, hide_amount: r.hide_amount ? 1 : 0, private_message: r.private_message ? 1 : 0 });
         return get(r.id);
     }
 
@@ -142,6 +149,7 @@ function createInteractions(ctx) {
             fail(422, 'tips.amount_too_small', `paying by checkout starts at ${config.billing.minPurchaseBits} Vibes; smaller tips use your Vibes balance`);
         }
         const target = entityRef(input.target);
+        const privacy = parsePrivacy(input.privacy, v.kind);
         return ctx.tx(() => {
             if (idempotencyKey) {
                 const prev = db.prepare('SELECT * FROM tip_interactions WHERE idempotency_key = ?').get(idempotencyKey);
@@ -151,6 +159,7 @@ function createInteractions(ctx) {
                 id: prefixedId('tint', ctx.now()), creator_subject: profile.creator_subject, supporter_subject: from, supporter_name: displayName(supporterName) || 'Someone',
                 kind: v.kind, amount: v.amount, message: v.message, request: v.request, funding, settlement: 'billing', payment_state: 'pending',
                 delivery_state: 'awaiting_payment', idempotency_key: idempotencyKey || null, target,
+                ...privacy, private_message: privacy.private_message && !!v.message,
             });
             return { interaction: i, replay: false };
         });
@@ -252,9 +261,8 @@ function createInteractions(ctx) {
         }
         if (!test && i.origin !== 'import') ctx.goals.contribute(i, req.goal_id);
 
-        const view = { message: i.message, tts: req.tts || null, media: req.media ? { url: req.media.url } : null };
         if (i.origin !== 'import') {
-            ctx.overlays.addAlert(i, view);
+            ctx.overlays.addAlert(i);
             addEffect(i, 'overlay_alert', 'overlay', 'delivered');
         }
         // Chat effects: never for imports (history), never twice for a donation another product already
@@ -310,7 +318,7 @@ function createInteractions(ctx) {
             if (amount <= 0) return 'ignored:no_amount';
             const i = insert({
                 id: prefixedId('tint', ctx.now()), creator_subject: p.to_subject, supporter_subject: p.from_subject || null,
-                supporter_name: displayName(meta.donor_name) || null, kind: meta.kind === 'paid_interaction' ? 'media_request' : 'tip', amount, amount_cents: meta.paid_cents || null,
+                supporter_name: displayName(meta.donor_name) || null, anonymous: meta.anonymous === true, kind: meta.kind === 'paid_interaction' ? 'media_request' : 'tip', amount, amount_cents: meta.paid_cents || null,
                 message: meta.message ? String(meta.message).slice(0, config.limits.messageChars) : null,
                 funding: p.provider ? 'provider' : 'credit', settlement: 'billing', payment_state: 'pending', delivery_state: 'awaiting_payment',
                 test: txn.test ? 1 : 0, billing_txn_id: txn.id, provider: p.provider || null, origin: 'billing',
@@ -429,7 +437,7 @@ function createInteractions(ctx) {
         const goalId = goalFromPurpose(p.app_purpose, p.app_ref);
         const i = insert({
             id: prefixedId('tint', ctx.now()), creator_subject: creator, supporter_subject: null,
-            supporter_name: p.anonymous ? 'Anonymous' : (displayName(p.donor_name) || 'Someone'), kind: 'tip', amount, amount_cents: cents,
+            supporter_name: p.anonymous ? 'Anonymous' : (displayName(p.donor_name) || 'Someone'), anonymous: !!p.anonymous, kind: 'tip', amount, amount_cents: cents,
             message, request: goalId ? { goal_id: goalId } : {}, funding: 'external', settlement: 'external', payment_state: 'pending',
             delivery_state: 'awaiting_payment', provider, provider_ref: ref, origin: 'billing-external', test: p.test ? 1 : 0,
         });
@@ -446,6 +454,7 @@ function createInteractions(ctx) {
         const ref = String(input.provider_ref || '').trim();
         if (!ref || ref.length > 200) fail(422, 'tips.invalid_input', 'provider_ref (the provider event id) is required');
         const cents = positiveInt(input.amount_cents, 'amount_cents', 100_000_000);
+        const privacy = parsePrivacy(input.privacy, 'tip');
         return ctx.tx(() => {
             const prev = db.prepare('SELECT * FROM tip_interactions WHERE provider = ? AND provider_ref = ?').get(provider, ref);
             if (prev) return { interaction: prev, replay: true };
@@ -457,6 +466,7 @@ function createInteractions(ctx) {
                 // origin external: the provider (or Live's webhook) already announced it in chat; with
                 // announce: true Tips delivers the chat line itself.
                 provider, provider_ref: ref, origin: input.announce === true ? 'tips' : 'external', test: input.test ? 1 : 0,
+                ...privacy, private_message: privacy.private_message && !!input.message,
             });
             return { interaction: settle(i), replay: false };
         });
@@ -465,12 +475,13 @@ function createInteractions(ctx) {
     /** The full effect path with test = 1 and no Billing call. */
     function simulate(profile, input, { by }) {
         const v = validate(profile, { ...input, amount: input.amount || Math.max(profile.min_amount, 100) }, { simulation: true });
+        const privacy = parsePrivacy(input.privacy, v.kind);
         return ctx.tx(() => {
             const i = insert({
                 id: prefixedId('tint', ctx.now()), creator_subject: profile.creator_subject, supporter_subject: null,
                 supporter_name: displayName(input.supporter_name) || 'Test supporter', kind: v.kind, amount: v.amount, message: v.message,
                 request: { ...v.request, simulated_by: by }, funding: 'none', settlement: 'simulated', payment_state: 'pending',
-                delivery_state: 'awaiting_payment', test: 1,
+                delivery_state: 'awaiting_payment', test: 1, ...privacy, private_message: privacy.private_message && !!v.message,
             });
             const out = settle(i);
             // Show the goal widget moving without counting anything: a test goal delivery with the
@@ -479,29 +490,39 @@ function createInteractions(ctx) {
             if (g) {
                 const view = ctx.goals.present(g);
                 const would = { ...view, current_amount: view.current_amount + v.amount, percent: Math.min(100, Math.floor(((view.current_amount + v.amount) * 100) / view.target_amount)) };
-                ctx.overlays.addGoalDelivery(profile.creator_subject, would, { reason: 'simulation', interactionId: i.id, by: i.supporter_name, dedupe: `goal:${g.id}:sim:${i.id}`, test: true });
+                ctx.overlays.addGoalDelivery(profile.creator_subject, would, { reason: 'simulation', interactionId: i.id, by: i.hide_amount ? null : publicName(i), dedupe: `goal:${g.id}:sim:${i.id}`, test: true });
             }
             return out;
         });
     }
 
     // ── Reads ────────────────────────────────────────────────
+    /** The event payload (tips.interaction.*): an anonymous supporter is never named, not even by subject. */
     function summary(i) {
+        const anon = isAnonymous(i);
         return {
-            interaction_id: i.id, creator: { type: 'user', id: i.creator_subject }, supporter: i.supporter_subject ? { type: 'user', id: i.supporter_subject } : null,
-            supporter_name: i.supporter_name || null, kind: i.kind, amount: i.amount, currency: i.currency, settlement: i.settlement,
+            interaction_id: i.id, creator: { type: 'user', id: i.creator_subject }, supporter: i.supporter_subject && !anon ? { type: 'user', id: i.supporter_subject } : null,
+            supporter_name: anon ? publicName(i) : (i.supporter_name || null), kind: i.kind, amount: i.amount, currency: i.currency, settlement: i.settlement,
             payment_state: i.payment_state, delivery_state: i.delivery_state, billing_txn_id: i.billing_txn_id || null, test: !!i.test,
         };
     }
 
+    /**
+     * viewer: 'supporter' (their own receipt: everything they chose), 'owner' (the creator) or
+     * 'service'. Anyone but the supporter gets no subject and "Anonymous" for an anonymous supporter;
+     * `public` is what may be shown to the public, `privacy` the supporter's choices.
+     */
     function present(i, { viewer = 'owner' } = {}) {
         if (!i) return null;
         const req = json(i.request, {});
+        const own = viewer === 'supporter';
+        const named = own || !isAnonymous(i);
         const out = {
-            id: i.id, creator: { type: 'user', id: i.creator_subject }, supporter: i.supporter_subject ? { type: 'user', id: i.supporter_subject } : null,
-            supporter_name: i.supporter_name || null, kind: i.kind, amount: i.amount, currency: i.currency, message: i.message || null,
+            id: i.id, creator: { type: 'user', id: i.creator_subject }, supporter: i.supporter_subject && named ? { type: 'user', id: i.supporter_subject } : null,
+            supporter_name: named ? (i.supporter_name || null) : publicName(i), kind: i.kind, amount: i.amount, currency: i.currency, message: i.message || null,
             tts: req.tts || null, media: req.media ? { url: req.media.url, provider: req.media.provider } : null, goal_id: req.goal_id || null,
             funding: i.funding, settlement: i.settlement, origin: i.origin, test: !!i.test,
+            privacy: privacyOf(i), public: publicView(i), erased_at: i.erased_at || null,
             payment: { state: i.payment_state, billing_txn_id: i.billing_txn_id || null, reversal_txn_ids: json(i.reversal_txn_ids, []), reversed_amount: i.reversed_bits, failure: i.failure || null, settled_at: i.settled_at || null, reversed_at: i.reversed_at || null },
             delivery: { state: i.delivery_state, delivered_at: i.delivered_at || null },
             created_at: i.created_at, updated_at: i.updated_at,
@@ -529,6 +550,101 @@ function createInteractions(ctx) {
         return { rows: page, next_cursor: next };
     }
 
+    // ── The public supporters page ───────────────────────────
+    // Only settled, non-test interactions of supporters who kept both their name and their amount
+    // public count toward the leaderboard (a hidden amount must not be inferable from a rank).
+    const leaderboardWhere = (t) => `${t}.creator_subject = @c AND ${t}.supporter_subject IS NOT NULL AND ${t}.test = 0
+        AND ${t}.payment_state IN ('settled', 'reversed') AND ${t}.anonymous = 0 AND ${t}.hide_amount = 0 AND ${t}.erased_at IS NULL`;
+
+    /** Top supporters: [{ rank, name, total, tips }] (name = the latest name they tipped under). */
+    function leaderboard(creator, { limit = 20 } = {}) {
+        const rows = db.prepare(`SELECT t.supporter_subject AS s, SUM(t.amount - t.reversed_bits) AS total, COUNT(*) AS tips, MIN(t.created_at) AS first_at,
+                (SELECT j.supporter_name FROM tip_interactions j WHERE ${leaderboardWhere('j')} AND j.supporter_subject = t.supporter_subject
+                    ORDER BY j.created_at DESC LIMIT 1) AS name
+            FROM tip_interactions t WHERE ${leaderboardWhere('t')}
+            GROUP BY t.supporter_subject HAVING total > 0 ORDER BY total DESC, first_at LIMIT @n`).all({ c: creator, n: Math.min(100, Math.max(1, limit)) });
+        return rows.map((r, k) => ({ rank: k + 1, name: r.name || 'Someone', total: r.total, tips: r.tips }));
+    }
+
+    /** Recent settled interactions with a public message, as publicView(). */
+    function recentPublic(creator, { limit = 20 } = {}) {
+        return db.prepare(`SELECT * FROM tip_interactions WHERE creator_subject = ? AND test = 0 AND payment_state = 'settled' AND private_message = 0
+                AND erased_at IS NULL AND message IS NOT NULL ORDER BY settled_at DESC, id DESC LIMIT ?`).all(creator, Math.min(100, Math.max(1, limit)))
+            .map((i) => publicView(i));
+    }
+
+    // ── A supporter's own data ───────────────────────────────
+    /** Everything Tips holds about a supporter's tips (their own view), for a download. */
+    function exportFor(subject) {
+        const rows = db.prepare('SELECT * FROM tip_interactions WHERE supporter_subject = ? ORDER BY created_at').all(subject);
+        return {
+            service: 'tips', subject: { type: 'user', id: subject }, exported_at: iso(ctx.now()),
+            interactions: rows.map((i) => ({
+                ...present(i, { viewer: 'supporter' }),
+                goal_contributions: db.prepare('SELECT goal_id, amount, reversed_amount, created_at FROM tip_goal_contributions WHERE interaction_id = ?').all(i.id),
+                paid_message: db.prepare('SELECT kind, text, voice, highlight_seconds, status, created_at, updated_at FROM paid_messages WHERE interaction_id = ?').get(i.id) || null,
+                media_request: db.prepare('SELECT url, provider, status, created_at, updated_at FROM paid_media_requests WHERE interaction_id = ?').get(i.id) || null,
+            })),
+            not_included: 'Payments, balances and refunds are OpenVibe.Billing\'s records; ask Billing for them.',
+        };
+    }
+
+    /**
+     * Erase a supporter's data from their tips. The money record stays (amount, creator, Billing
+     * transaction, goal contribution: Billing's books and the creator's totals must still reconcile);
+     * the person goes: subject, name, message, TTS text, media link, checkout reference, stored API
+     * answers, overlay payloads and the unsent events that named them. Each erased interaction emits
+     * tips.interaction.erased, whose `redacts` has OpenVibe.Events tombstone the earlier events about
+     * it. Interactions still waiting for their payment are kept (the payment needs the supporter) and
+     * counted in kept_pending.
+     */
+    function erase(subject) {
+        return ctx.tx(() => {
+            const rows = db.prepare('SELECT * FROM tip_interactions WHERE supporter_subject = ?').all(subject);
+            const at = iso(ctx.now());
+            let erased = 0;
+            for (const i of rows) {
+                if (i.payment_state === 'pending') continue;
+                const req = json(i.request, {});
+                const keep = {};
+                if (req.goal_id) keep.goal_id = req.goal_id;
+                if (req.highlight_seconds) keep.highlight_seconds = req.highlight_seconds;
+                db.prepare(`UPDATE tip_interactions SET supporter_subject = NULL, supporter_name = NULL, anonymous = 1, message = NULL, request = ?,
+                        idempotency_key = NULL, checkout_url = NULL, checkout_ref = NULL, erased_at = ?, updated_at = ? WHERE id = ?`)
+                    .run(JSON.stringify(keep), at, at, i.id);
+                db.prepare("UPDATE paid_messages SET text = '', voice = NULL, updated_at = ? WHERE interaction_id = ?").run(at, i.id);
+                db.prepare("UPDATE paid_media_requests SET url = '', updated_at = ? WHERE interaction_id = ?").run(at, i.id);
+                const now = get(i.id);
+                ctx.overlays.refreshInteraction(now);
+                scrubOutbox(now);
+                if (!i.test) {
+                    ctx.outbox.emit('tips.interaction.erased', { type: 'interaction', id: i.id }, {
+                        interaction_id: i.id, creator: { type: 'user', id: i.creator_subject }, erased_at: at,
+                        redacts: { subject_type: 'interaction', subject_ids: [i.id] },
+                    });
+                }
+                erased++;
+            }
+            // Stored API answers (Idempotency-Key replays) carry messages and the subject.
+            const prefix = `${subject}:`;
+            const answers = db.prepare('DELETE FROM api_idempotency WHERE substr(key, 1, ?) = ? OR instr(response, ?) > 0').run(prefix.length, prefix, subject).changes;
+            if (erased) ctx.afterCommit(() => ctx.outboxKick());
+            return { erased, kept_pending: rows.length - erased, stored_answers_removed: answers };
+        });
+    }
+
+    /** Events about an erased interaction that are still in the local outbox lose the supporter's name. */
+    function scrubOutbox(i) {
+        const rows = db.prepare("SELECT id, envelope FROM event_outbox WHERE json_extract(envelope, '$.subject.type') = 'interaction' AND json_extract(envelope, '$.subject.id') = ?").all(i.id);
+        for (const r of rows) {
+            const env = JSON.parse(r.envelope);
+            if (!env.payload || !('supporter' in env.payload)) continue;
+            env.payload.supporter = null;
+            env.payload.supporter_name = publicName(i);
+            db.prepare('UPDATE event_outbox SET envelope = ? WHERE id = ?').run(JSON.stringify(env), r.id);
+        }
+    }
+
     /**
      * A creator's totals, derived from settled interactions. `billing` is what must equal Billing's
      * books (settled through Billing or imported from Live's ledger, minus what Billing took back);
@@ -548,6 +664,7 @@ function createInteractions(ctx) {
     return {
         get, byBillingTxn, validate, request, transfer, startCheckout, processDueTransfers, settleByTransaction, settle, failPayment,
         onBillingSettled, onBillingReversed, onBillingExternal, cancelQueued, recomputeDelivery, recordExternal, simulate, summary, present, list, totals, insert, KINDS,
+        leaderboard, recentPublic, exportFor, erase,
     };
 }
 

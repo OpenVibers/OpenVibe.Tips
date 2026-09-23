@@ -61,4 +61,11 @@ dl.receipt dd { margin: 0; overflow-wrap: anywhere; }
 .steps li { margin: 8px 0; }
 .js .tip-form .when-tts, .js .tip-form .when-media { display: none; }
 .js .tip-form[data-kind=tts] .when-tts, .js .tip-form[data-kind=media_request] .when-media { display: block; }
+.js .tip-form:not([data-kind=tip]) .when-tip { display: none; }
+ol.leaderboard { padding-left: 1.6em; }
+ol.leaderboard li, ul.supporters li { margin: 4px 0; }
+ul.supporters { list-style: none; padding: 0; margin: 6px 0 0; display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: .92rem; }
+ul.wall { list-style: none; padding: 0; }
+ul.wall li { border-bottom: 1px solid var(--tips-border); padding: 8px 0; }
+ul.wall p { margin: 4px 0; overflow-wrap: anywhere; }
 @media (max-width: 560px) { dl.receipt { grid-template-columns: 1fr; } .creator-head { flex-direction: column; align-items: flex-start; } table.list { font-size: .85rem; } }

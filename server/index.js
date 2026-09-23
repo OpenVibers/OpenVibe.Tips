@@ -6,7 +6,8 @@
  *
  * Background jobs (TIPS_JOBS=off disables them): the effects worker (chat delivery with retries),
  * due Billing transfers (funded checkouts, retries after Billing was unreachable), the overlay
- * delivery window (pending → failed), and the events outbox relay when EVENTS_URL is set.
+ * delivery window (pending → failed), stored API answers older than a week, and the events outbox
+ * relay when EVENTS_URL is set.
  */
 const { loadConfig } = require('./config');
 const { createApp } = require('./app');
@@ -23,6 +24,7 @@ if (config.jobs.enabled) {
     every(Math.max(config.jobs.intervalMs, 5000), () => domain.interactions.processDueTransfers());
     every(30_000, () => domain.overlays.sweepFailed());
     every(6 * 3600 * 1000, () => outbox.outbox.prune());
+    every(6 * 3600 * 1000, () => require('./api/idempotency').pruneAnswers(domain.db));
     outbox.start();
 }
 
