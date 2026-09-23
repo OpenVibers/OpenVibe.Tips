@@ -95,7 +95,7 @@ function creatorPage({ profile, goals, viewer, csrf, idem, values, providers, er
 <section class="creator-head">
   ${profile.avatar_url ? `<img class="avatar" src="${esc(profile.avatar_url)}" alt="" width="96" height="96">` : ''}
   <div><h1>${esc(profile.display_name)}</h1>${profile.headline ? `<p class="headline">${esc(profile.headline)}</p>` : ''}
-  <p class="links"><a href="https://openvibe.live/${esc(profile.handle)}">Watch on OpenVibe.Live</a> · <a href="/${esc(profile.handle)}/goals">Goals</a>${profile.page.supporters_page ? ` · <a href="/${esc(profile.handle)}/supporters">Supporters</a>` : ''}</p></div>
+  <p class="links"><a href="https://openvibe.live/@${esc(profile.handle)}">Watch on OpenVibe.Live</a> · <a href="/${esc(profile.handle)}/goals">Goals</a>${profile.page.supporters_page ? ` · <a href="/${esc(profile.handle)}/supporters">Supporters</a>` : ''}</p></div>
 </section>
 ${active.length ? `<section><h2>Goals</h2>${active.map(goalCard).join('')}</section>` : ''}
 ${tipForm({ profile, goals, viewer, csrf, idem, values, providers, error })}`;
