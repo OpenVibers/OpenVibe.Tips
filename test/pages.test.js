@@ -26,7 +26,7 @@ const { boot, check, done } = require('./helpers/app');
         const r = await get('/');
         assert.strictEqual(r.status, 200);
         assert.match(r.text, /<noscript><nav/);
-        assert.match(r.text, /https:\/\/openvibe\.network\/shared\/navbar\.js/);
+        assert.match(r.text, /\/shared\/navbar\.js\?v=[0-9a-f]{12}/);
         assert.match(r.text, /<meta name="ov-release"/);
         assert.match(r.text, /id="ov-footer"|class="ovf/);
         assert.match(r.text, /href="\/alex"/);

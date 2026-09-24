@@ -22,6 +22,7 @@
  *   GET  /robots.txt, /sitemap.xml
  */
 const crypto = require('crypto');
+const ovServe = require('openvibe-shared/serve');
 const frame = require('openvibe-shared/frame');
 const express = require('express');
 const { TipsError, json: parseJson } = require('../util');
@@ -68,7 +69,7 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
         html(res, pageFor(req, { active: 'home', canonicalPath: '/', body: pages.home({ creators }) }));
     });
     // What shipped on OpenVibe.Tips: the shared update log every OpenVibe site has.
-    r.get('/updates', withViewer, (req, res) => html(res, pageFor(req, { canonicalPath: '/updates', title: 'What shipped on OpenVibe.Tips', body: frame.updatesBody({ service: 'tips', siteName: 'OpenVibe.Tips' }) + frame.shippedScript() })));
+    r.get('/updates', withViewer, (req, res) => html(res, pageFor(req, { canonicalPath: '/updates', title: 'What shipped on OpenVibe.Tips', body: frame.updatesBody({ service: 'tips', siteName: 'OpenVibe.Tips' }) + `<script src="${ovServe.url('shipped.js')}" defer></script>` })));
     r.get('/robots.txt', (req, res) => res.type('text/plain').set('Cache-Control', 'public, max-age=3600').send(
         `User-agent: *\nAllow: /\nDisallow: /dashboard\nDisallow: /receipts\nDisallow: /overlay/\nDisallow: /moderate/\nDisallow: /auth/\nDisallow: /api/\nDisallow: /internal/\nSitemap: ${config.baseUrl}/sitemap.xml\n`));
     r.get('/sitemap.xml', (req, res) => {
