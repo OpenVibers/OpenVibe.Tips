@@ -22,6 +22,7 @@
  *   GET  /robots.txt, /sitemap.xml
  */
 const crypto = require('crypto');
+const frame = require('openvibe-shared/frame');
 const express = require('express');
 const { TipsError, json: parseJson } = require('../util');
 const { viewerMiddleware } = require('./session');
@@ -66,6 +67,8 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
         const creators = db.prepare(`SELECT handle, display_name, avatar_url FROM creator_tip_profiles WHERE page_enabled = 1 ORDER BY updated_at DESC LIMIT 24`).all();
         html(res, pageFor(req, { active: 'home', canonicalPath: '/', body: pages.home({ creators }) }));
     });
+    // What shipped on OpenVibe.Tips: the shared update log every OpenVibe site has.
+    r.get('/updates', withViewer, (req, res) => html(res, pageFor(req, { canonicalPath: '/updates', title: 'What shipped on OpenVibe.Tips', body: frame.updatesBody({ service: 'tips', siteName: 'OpenVibe.Tips' }) + frame.shippedScript() })));
     r.get('/robots.txt', (req, res) => res.type('text/plain').set('Cache-Control', 'public, max-age=3600').send(
         `User-agent: *\nAllow: /\nDisallow: /dashboard\nDisallow: /receipts\nDisallow: /overlay/\nDisallow: /moderate/\nDisallow: /auth/\nDisallow: /api/\nDisallow: /internal/\nSitemap: ${config.baseUrl}/sitemap.xml\n`));
     r.get('/sitemap.xml', (req, res) => {

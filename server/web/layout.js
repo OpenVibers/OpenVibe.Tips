@@ -2,7 +2,7 @@
 
 /**
  * Page shell for every server-rendered page: full <head> SEO (title, description, canonical,
- * robots, Open Graph), the shared OpenVibe chrome (inline critical canvas + app icon from
+ * robots, Open Graph), the shared OpenVibe Frame (inline critical canvas + app icon from
  * openvibe-shared, navbar.js from the Network, the SSR footer and a <noscript> navigation), this
  * site's stylesheet and its small progressive script. Everything is useful without JavaScript.
  */
@@ -10,7 +10,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const appIcon = require('openvibe-shared/app-icon');
-const chrome = require('openvibe-shared/chrome-ssr');
+const frame = require('openvibe-shared/frame');
 
 const SITE_NAME = 'OpenVibe.Tips';
 const NETWORK_URL = 'https://openvibe.network';
@@ -54,7 +54,9 @@ function createLayout({ config, release }) {
             silentLogin: `${config.baseUrl}/auth/login?silent=1&next={url}`,
             sessionUrl: '/auth/me',
             loginUrl: `/auth/login?next=${encodeURIComponent(o.canonicalPath || '/')}`,
+            logoutUrl: '/auth/logout?next={path}',   // Sign out in the shared navbar ends this site's session too
         };
+        const footer = { service: 'tips', variant: 'full', mount: '#ov-footer', brandName: SITE_NAME, updates: '/updates' };
         const jsonLd = (o.jsonLd || []).map((x) => `<script type="application/ld+json">${JSON.stringify(x).replace(/</g, '\\u003c')}</script>`).join('\n');
         const who = o.viewer
             ? `<span class="who">Signed in as <b>${esc(o.viewer.name || o.viewer.username || 'you')}</b> · <a href="/auth/logout?next=/">Sign out</a></span>`
@@ -82,20 +84,23 @@ ${release ? release.metaTag() : ''}
 <link rel="stylesheet" href="${asset('css/tips.css')}">
 ${jsonLd}
 <script src="${NETWORK_URL}/shared/navbar.js" defer></script>
+<script src="${NETWORK_URL}/shared/footer.js" defer></script>
 <script src="${asset('js/tips.js')}" defer></script>
 </head>
 <body>
 <div id="navbar-mount"></div>
-${chrome.noscriptNav({ name: SITE_NAME, home: '/', links: NAV_LINKS })}
+${frame.noscriptNav({ name: SITE_NAME, home: '/', links: NAV_LINKS })}
 <header class="site-head"><a class="brand" href="/">${SITE_NAME}</a><nav>${NAV_LINKS.map((l) => `<a href="${l.href}"${o.active === l.label.toLowerCase() ? ' aria-current="page"' : ''}>${l.label}</a>`).join('')}</nav>${who}</header>
 <main id="main" class="page">
 ${o.body || ''}
+${o.canonicalPath === '/' && o.active === 'home' ? frame.shipped({ service: 'tips', title: `Recently shipped on ${SITE_NAME}` }) : ''}
 </main>
-${chrome.footer({ service: 'tips', variant: 'full' })}
+${frame.footer(footer)}
 <script>
-window.__OV_PAGE = ${JSON.stringify({ navbar: nav }).replace(/</g, '\\u003c')};
+window.__OV_PAGE = ${JSON.stringify({ navbar: nav, footer }).replace(/</g, '\\u003c')};
 document.addEventListener('DOMContentLoaded', function () {
   try { if (window.OpenVibeNavbar) { OpenVibeNavbar.init(window.__OV_PAGE.navbar); document.documentElement.classList.add('ov-has-navbar'); } } catch (e) { /* the SSR header stays */ }
+  try { if (window.OpenVibeFooter) OpenVibeFooter.init(window.__OV_PAGE.footer); } catch (e) { /* */ }
 });
 </script>
 </body>
