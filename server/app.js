@@ -66,9 +66,10 @@ function createApp(opts = {}) {
         res.setHeader('X-Content-Type-Options', 'nosniff');
         res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
         // Pages frame nothing but the Network's /sso/check; overlays are loaded by OBS, not framed by sites.
+        // connect-src events.openvibe.network: release notifications (release-watch's EventSource, openvibe-shared 1.17).
         res.setHeader('Content-Security-Policy', [
             "default-src 'self'", "script-src 'self' 'unsafe-inline' https://openvibe.network", "style-src 'self' 'unsafe-inline' https://openvibe.network",
-            "img-src 'self' data: https:", "media-src 'self' https:", "connect-src 'self' https://openvibe.network", "frame-src 'self' https://openvibe.network",
+            "img-src 'self' data: https:", "media-src 'self' https:", "connect-src 'self' https://openvibe.network https://events.openvibe.network", "frame-src 'self' https://openvibe.network",
             "frame-ancestors 'self'", "object-src 'none'", "base-uri 'self'", "form-action 'self' https://openvibe.network https:",
         ].join('; '));
         next();
