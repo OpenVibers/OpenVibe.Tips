@@ -40,6 +40,9 @@ function decodeJwtPayload(token) {
 }
 
 function sanitizeNext(next, config) {
+    // Browsers drop tab and newline characters from a URL and read a backslash as "/": "/<TAB>/evil.com" would
+    // leave the site. A next with any control character or backslash goes home.
+    if (typeof next === 'string' && /[\u0000-\u001f\u007f\\]/.test(next)) return '/';
     if (!next || typeof next !== 'string') return '/';
     if (/^\/(?!\/|\\)/.test(next)) return next;
     try {
