@@ -140,13 +140,13 @@ function fixture(file) {
         assert.strictEqual(await db.value("INSERT INTO tips_event_outbox (event_id, envelope, created_at) VALUES ('evt_03', '{}', 1) RETURNING id"), 3);
     });
 
-    await check('a rehearsal can be repeated (truncate), and a value the checksum would miss is caught', async () => {
+    await check('a rehearsal can be repeated (truncate), and JSON null verifies without a mapping', async () => {
         const again = await importSqlite({ sqlite: file, db, truncate: true, tables: TABLES, log: quiet });
         assert.strictEqual(again.ok, true, JSON.stringify(again.problems));
-        // Without the 'null' mapping, JSON null and SQL NULL differ: the verification says so.
-        const bad = await importSqlite({ sqlite: file, db, truncate: true, tables: { ...TABLES, paid_messages: {} }, only: ['paid_messages', 'tip_interactions', 'creator_tip_profiles'], log: quiet });
-        assert.strictEqual(bad.ok, false);
-        assert.match(bad.problems.map((x) => `${x.table}: ${x.problem}`).join('\n'), /paid_messages: verification failed/);
+        // openvibe-sdk ≥ 0.18 counts JSON null and SQL NULL as equal in verification, so the import is verified
+        // even without Tips' own 'null' mapping (which stays: it stores SQL NULL, not a JSON null).
+        const plain = await importSqlite({ sqlite: file, db, truncate: true, tables: { ...TABLES, paid_messages: {} }, only: ['paid_messages', 'tip_interactions', 'creator_tip_profiles'], log: quiet });
+        assert.strictEqual(plain.ok, true, JSON.stringify(plain.problems));
         await importSqlite({ sqlite: file, db, truncate: true, tables: TABLES, log: quiet });
     });
 

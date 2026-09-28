@@ -208,8 +208,12 @@ const { boot, check, done } = require('./helpers/app');
         const count = () => t.db.value('SELECT (SELECT count(*) FROM paid_messages WHERE interaction_id = ANY($1)) + (SELECT count(*) FROM paid_media_requests WHERE interaction_id = ANY($1))', [ids]);
         assert.strictEqual(await count(), 0);
         for (const id of ids) await t.deliver(billing.settlePurchase((await domain.interactions.get(t.db, id)).billing_intent_id));
-        await new Promise((ok) => setTimeout(ok, 100));
-        await domain.interactions.processDueTransfers();
+        // A background pass may hold a transfer's lease for a moment (FOR UPDATE SKIP LOCKED): drain until all
+        // three are done, within a deadline, instead of trusting one pass after a fixed sleep.
+        for (const until = Date.now() + 3000; (await count()) < 3 && Date.now() < until;) {
+            await domain.interactions.processDueTransfers();
+            await new Promise((ok) => setTimeout(ok, 50));
+        }
         assert.strictEqual(await count(), 3);
         const pm = await t.db.maybe('SELECT * FROM paid_messages WHERE interaction_id = $1', [ids[0]]);
         assert.strictEqual(pm.highlight_seconds, 60);
