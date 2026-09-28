@@ -101,6 +101,13 @@ function loadConfig(env = process.env) {
             pendingCheckouts: int(env.TIPS_MAX_PENDING_CHECKOUTS, 20), // unpaid checkouts per supporter per day
         },
 
+        // Per-actor limits on /api/v1 (server/api/actor-limits.js, roadmap WS-R task 4): the reads one
+        // caller may make per minute and per hour. Payments and other writes set tighter numbers in api/v1.js.
+        actorLimits: {
+            minute: Math.max(1, int(env.TIPS_LIMITS_MINUTE, 120)),
+            hour: Math.max(1, int(env.TIPS_LIMITS_HOUR, 3000)),
+        },
+
         jobs: {
             enabled: env.TIPS_JOBS !== 'off',
             intervalMs: int(env.TIPS_JOBS_INTERVAL_MS, 2000),

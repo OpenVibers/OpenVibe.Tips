@@ -274,6 +274,27 @@ that shows it. The fixes it made:
 The regressions are in `test/security.test.js`. It is an internal review; an independent one is still due
 before launch.
 
+### Per-actor limits
+
+`/api/v1` also limits who calls it, once the credential is checked and before any work (the idempotency
+store, Billing, chat delivery): `server/api/actor-limits.js`, openvibe-sdk/limits, roadmap WS-R task 4. A
+service counts as its principal (`svc:live`), a person as `user:usr_…`, anyone else by address. Past a limit:
+`429` problem+json `rate_limited` with `Retry-After`, one log line and `tips_rate_limited_total{limit,window}`.
+
+| Routes | Per caller |
+|---|---|
+| Every read | `TIPS_LIMITS_MINUTE` / `TIPS_LIMITS_HOUR` (120 a minute, 3000 an hour) |
+| `POST /checkout`, `/paid-messages`, `/tts-requests`, `/media-requests` (one budget) | a person 20 / 200; a service 60 / 1200 |
+| `POST /interactions/external` | 60 / 1200 |
+| Profile, goal and overlay config changes, token revoke | 30 / 300 |
+| `POST /overlay-tokens` | 10 / 60 |
+| Hide and restore | 60 / 600 |
+| Moderators add and remove; `POST /simulate` | 10 / 100 |
+| `POST /me/erase` | 3 / 10 |
+
+Never limited: `/api/health`, `/api/ready`, `/release.json`, `/metrics`, the overlays (bounded by
+`TIPS_OVERLAY_MAX_STREAMS`) and the signed Events deliveries at `/internal/events`. `test/actor-limits.test.js`.
+
 ## Import and reconciliation
 
 `scripts/import-live.js` reads a **copy** of Live's database (read-only) after Billing's own import, and

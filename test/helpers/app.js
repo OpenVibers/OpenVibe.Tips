@@ -2,6 +2,7 @@
 /**
  * Boots Tips against the stubs on a random port with a temp database. Jobs are off: tests drive the
  * effects worker and transfer retries explicitly (domain.effects.drain(), processDueTransfers()).
+ * opts.env overrides the environment; opts.appOpts is passed to createApp (e.g. limitsNow).
  *
  *   t.call(method, path, { body, user, cap, sub, key })   user: a stub user → Bearer user JWT;
  *                                                          otherwise a service token with `cap`
@@ -52,7 +53,7 @@ async function boot(opts = {}) {
     const clock = { offset: 0 };
     const logs = [];
     const log = { log: (...a) => logs.push(a.join(' ')), warn: (...a) => logs.push(a.join(' ')), error: (...a) => logs.push(a.join(' ')) };
-    const app = createApp({ config, now: () => Date.now() + clock.offset, log });
+    const app = createApp({ config, now: () => Date.now() + clock.offset, log, ...(opts.appOpts || {}) });
     await app.locals.keys.load();
     const server = await new Promise((resolve) => { const s = http.createServer(app); s.listen(0, '127.0.0.1', () => resolve(s)); });
     const base = `http://127.0.0.1:${server.address().port}`;

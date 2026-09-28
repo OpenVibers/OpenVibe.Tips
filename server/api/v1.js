@@ -64,10 +64,17 @@ const CAP = {
     moderate: 'tips.interaction.moderate',   // in openvibe-contracts since v0.32.0 (was docs/capabilities-proposal/)
 };
 
-function v1Router({ domain, apiAuth }) {
+function v1Router({ domain, apiAuth, limits }) {
     const r = express.Router();
     const { db, profiles, goals, interactions, overlays } = domain;
     const idem = idempotent(db, domain.now);
+
+    // Per-actor limits (api/actor-limits.js), after the credential and before any work: every read takes
+    // the defaults; each write below names its own, tighter numbers.
+    r.use(limits.reads('tips.read'));
+    const edit = limits('tips.settings.update', { minute: 30, hour: 300 });     // profile, goals, overlay configs
+    const moderate = limits('tips.interaction.moderate', { minute: 60, hour: 600 });
+    const staffing = limits('tips.moderators.update', { minute: 10, hour: 100 });
 
     /** Service with `cap`, or the user who owns `owner` (subject). Anonymous → 401. */
     function allow(req, cap, owner) {
@@ -122,9 +129,11 @@ function v1Router({ domain, apiAuth }) {
         return req.principal.subject;
     };
     r.get('/me/export', wrap((req, res) => res.json(interactions.exportFor(person(req)))));
-    r.post('/me/erase', ...write((req, res) => res.json(interactions.erase(person(req)))));
+    // A person erasing their own tips does it once; the network's account deletion arrives through
+    // /internal/events, which is never limited.
+    r.post('/me/erase', limits('tips.me.erase', { minute: 3, hour: 10 }), ...write((req, res) => res.json(interactions.erase(person(req)))));
 
-    r.patch('/profiles/:creator', ...write((req, res) => {
+    r.patch('/profiles/:creator', edit, ...write((req, res) => {
         const b = req.body || {};
         let p;
         if (req.params.creator === 'me') {
@@ -191,10 +200,16 @@ function v1Router({ domain, apiAuth }) {
             });
         });
     }
-    r.post('/checkout', ...paid('tip', CAP.checkout));
-    r.post('/paid-messages', ...paid('paid_message', CAP.superchat));
-    r.post('/tts-requests', ...paid('tts', CAP.tts));
-    r.post('/media-requests', ...paid('media_request', CAP.media));
+    // Every paid request starts a Billing transfer or checkout and may reach the creator's chat: one
+    // budget for all four, refusals and retries included. A person sends at most 20 a minute and 200 an
+    // hour; a service relaying its supporters' tips gets one a second (60 and 1200).
+    const personPays = limits('tips.payment', { minute: 20, hour: 200 });
+    const servicePays = limits('tips.payment', { minute: 60, hour: 1200 });
+    const pays = (req, res, next) => (req.principal.kind === 'service' ? servicePays : personPays)(req, res, next);
+    r.post('/checkout', pays, ...paid('tip', CAP.checkout));
+    r.post('/paid-messages', pays, ...paid('paid_message', CAP.superchat));
+    r.post('/tts-requests', pays, ...paid('tts', CAP.tts));
+    r.post('/media-requests', pays, ...paid('media_request', CAP.media));
 
     // ── Interactions ─────────────────────────────────────────
     r.get('/interactions', wrap((req, res) => {
@@ -229,7 +244,8 @@ function v1Router({ domain, apiAuth }) {
         res.json({ interaction: interactions.present(i, { viewer }) });
     }));
 
-    r.post('/interactions/external', ...write((req, res) => {
+    // A service importing tips made elsewhere records one per tip, at most one a second.
+    r.post('/interactions/external', limits('tips.interaction.record', { minute: 60, hour: 1200 }), ...write((req, res) => {
         allow(req, CAP.interactionRecord);
         const b = req.body || {};
         const profile = creatorOf(req, b.creator);
@@ -259,7 +275,7 @@ function v1Router({ domain, apiAuth }) {
         if (!goalOwner(req, g.creator_subject)) return res.json({ goal: goals.publicGoal(g, profiles.bySubject(g.creator_subject).page) });
         res.json({ goal: goals.present(g, { contributions: true }) });
     }));
-    r.post('/goals', ...write((req, res) => {
+    r.post('/goals', edit, ...write((req, res) => {
         const b = req.body || {};
         const profile = creatorOf(req, b.creator);
         allow(req, CAP.goalCreate, profile.creator_subject);
@@ -271,8 +287,8 @@ function v1Router({ domain, apiAuth }) {
         allow(req, cap, g.creator_subject);
         return g;
     };
-    r.patch('/goals/:id', ...write((req, res) => res.json({ goal: goals.update(ownGoal(req, CAP.goalUpdate), req.body || {}) })));
-    r.post('/goals/:id/close', ...write((req, res) => res.json({ goal: goals.close(ownGoal(req, CAP.goalClose)) })));
+    r.patch('/goals/:id', edit, ...write((req, res) => res.json({ goal: goals.update(ownGoal(req, CAP.goalUpdate), req.body || {}) })));
+    r.post('/goals/:id/close', edit, ...write((req, res) => res.json({ goal: goals.close(ownGoal(req, CAP.goalClose)) })));
 
     // ── Overlay tokens and configs ───────────────────────────
     r.get('/overlay-tokens', wrap((req, res) => {
@@ -280,7 +296,8 @@ function v1Router({ domain, apiAuth }) {
         allow(req, CAP.tokenCreate, profile.creator_subject);
         res.json({ tokens: overlays.listTokens(profile.creator_subject).map(overlays.presentToken) });
     }));
-    r.post('/overlay-tokens', ...write((req, res) => {
+    // A token opens an overlay's event stream: a creator mints a few for their scenes.
+    r.post('/overlay-tokens', limits('tips.overlay.token.create', { minute: 10, hour: 60 }), ...write((req, res) => {
         const b = req.body || {};
         const profile = creatorOf(req, b.creator);
         allow(req, CAP.tokenCreate, profile.creator_subject);
@@ -291,7 +308,7 @@ function v1Router({ domain, apiAuth }) {
         res.locals.storedBody = { token: out.token, secret: null, overlay_url: null, events_url: null, note: 'the secret is shown once; revoke this token and create another' };
         res.status(201).json({ token: out.token, secret: out.secret, overlay_url: out.overlay_url, events_url: out.events_url });
     }));
-    r.post('/overlay-tokens/:id/revoke', ...write((req, res) => {
+    r.post('/overlay-tokens/:id/revoke', edit, ...write((req, res) => {
         const t = overlays.getToken(req.params.id);
         if (!t) fail(404, 'tips.overlay_token_not_found', 'no such overlay token');
         allow(req, CAP.tokenRevoke, t.creator_subject);
@@ -309,13 +326,13 @@ function v1Router({ domain, apiAuth }) {
         allow(req, CAP.configGet, c.creator_subject);
         res.json({ config: overlays.presentConfig(c) });
     }));
-    r.post('/overlay-configs', ...write((req, res) => {
+    r.post('/overlay-configs', edit, ...write((req, res) => {
         const b = req.body || {};
         const profile = creatorOf(req, b.creator);
         allow(req, CAP.configUpdate, profile.creator_subject);
         res.status(201).json({ config: overlays.createConfig(profile.creator_subject, b) });
     }));
-    r.patch('/overlay-configs/:id', ...write((req, res) => {
+    r.patch('/overlay-configs/:id', edit, ...write((req, res) => {
         const c = overlays.getConfig(req.params.id);
         if (!c) fail(404, 'tips.overlay_config_not_found', 'no such overlay config');
         allow(req, CAP.configUpdate, c.creator_subject);
@@ -347,7 +364,7 @@ function v1Router({ domain, apiAuth }) {
         res.json({ log: moderation.log(profile.creator_subject) });
     }));
     for (const action of ['hide', 'restore']) {
-        r.post(`/interactions/:id/${action}`, ...write((req, res) => {
+        r.post(`/interactions/:id/${action}`, moderate, ...write((req, res) => {
             const i = interactions.get(req.params.id);
             if (!i) fail(404, 'tips.interaction_not_found', 'no such interaction');
             const actor = moderatorOf(req, i.creator_subject, { hideExistence: true });
@@ -360,21 +377,22 @@ function v1Router({ domain, apiAuth }) {
         allow(req, CAP.profileUpdate, profile.creator_subject);
         res.json({ moderators: moderation.listModerators(profile.creator_subject).map(moderation.presentModerator) });
     }));
-    r.post('/moderators', ...write((req, res) => {
+    r.post('/moderators', staffing, ...write((req, res) => {
         const b = req.body || {};
         const profile = creatorOf(req, b.creator);
         allow(req, CAP.profileUpdate, profile.creator_subject);
         const by = req.principal.kind === 'service' ? req.principal.sub : req.principal.subject;
         res.status(201).json({ moderator: moderation.addModerator(profile.creator_subject, b.moderator, { name: b.name, addedBy: by }) });
     }));
-    r.post('/moderators/:subject/remove', ...write((req, res) => {
+    r.post('/moderators/:subject/remove', staffing, ...write((req, res) => {
         const profile = creatorOf(req, (req.body || {}).creator);
         allow(req, CAP.profileUpdate, profile.creator_subject);
         res.json(moderation.removeModerator(profile.creator_subject, req.params.subject));
     }));
 
     // ── Simulation ───────────────────────────────────────────
-    r.post('/simulate', ...write((req, res) => {
+    // A simulated tip plays on the creator's overlays and chat like a real one.
+    r.post('/simulate', limits('tips.simulation.run', { minute: 10, hour: 100 }), ...write((req, res) => {
         const b = req.body || {};
         const profile = creatorOf(req, b.creator);
         allow(req, CAP.simulate, profile.creator_subject);

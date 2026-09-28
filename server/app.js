@@ -27,6 +27,7 @@ const { consumerRouter } = require('./events/consumer');
 const { createDomain } = require('./domain');
 const { createApiAuth } = require('./api/auth');
 const { v1Router } = require('./api/v1');
+const { createActorLimits } = require('./api/actor-limits');
 const { createSessionRoutes } = require('./web/session');
 const { createWebRoutes } = require('./web/routes');
 const { createLayout, assetVersion } = require('./web/layout');
@@ -91,7 +92,10 @@ function createApp(opts = {}) {
     // through nginx carries X-Forwarded-For and is refused (the signature is checked as well).
     app.use('/internal', (req, res, next) => (req.headers['x-forwarded-for'] || req.headers['x-real-ip'] || req.headers['cf-connecting-ip']
         ? http.sendProblem(res, 404, 'not_found', { ctx: req.ov }) : next()), consumer.router);
-    app.use('/api/v1', express.json({ limit: '64kb' }), (req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); }, apiAuth.middleware, v1Router({ domain, apiAuth }));
+    // Per-actor limits on /api/v1 (api/actor-limits.js), counted once apiAuth resolved the caller.
+    // opts.limitsNow: the limiter's clock (tests).
+    const limits = createActorLimits({ config, now: opts.limitsNow || now, registry: metrics.registry, log });
+    app.use('/api/v1', express.json({ limit: '64kb' }), (req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); }, apiAuth.middleware, v1Router({ domain, apiAuth, limits }));
     app.use('/auth', createSessionRoutes(config, userAuth, { fetchImpl }));
     { const legal = require('openvibe-shared/legal'); app.get(legal.PATHS, legal.handler({ id: 'tips', service: 'tips', host: 'openvibe.tips', name: 'OpenVibe.Tips', profile: 'ugc' })); }
 
