@@ -25,7 +25,7 @@
  * word filter (filter.js) stars blocked words out of the name and message and drops them from what
  * text-to-speech reads.
  */
-const { fail, json } = require('../util');
+const { fail } = require('../util');
 const filter = require('./filter');
 
 const ANONYMOUS = 'Anonymous';
@@ -64,10 +64,11 @@ function shownName(i, settings) {
 
 /**
  * The public shape of an interaction. `at` is kept from an earlier overlay payload when given, so a
- * rewritten alert keeps its time; `filter` is the creator's filter settings.
+ * rewritten alert keeps its time; `filter` is the creator's filter settings (profiles.filterOf, or a
+ * profile's `filter`), fetched once per creator by the caller.
  */
 function publicView(i, { at, filter: settings = null } = {}) {
-    const req = json(i.request, {});
+    const req = i.request || {};
     const privateMsg = !!i.private_message || !!i.erased_at;
     const base = {
         interaction_id: i.id,

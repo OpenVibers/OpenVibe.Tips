@@ -10,16 +10,18 @@
  *   tips.overlay.delivered      an overlay delivery reached at least one overlay (first time only)
  *   tips.overlay.failed         no overlay received it within the delivery window
  *
- * enqueue() runs inside the SQLite transaction that makes the change, so an event exists if and
- * only if its change committed. Simulations (test) never produce events. The relay publishes with
+ * emit(t, …) runs inside the transaction that makes the change (its handle `t`), so an event exists if
+ * and only if its change committed. Simulations (test) never produce events. The relay publishes with
  * Tips' service token (events.event.publish, audience openvibe.events) only when EVENTS_URL and
- * OV_OAUTH_CLIENT_SECRET are set; otherwise rows wait in event_outbox.
+ * OV_OAUTH_CLIENT_SECRET are set; otherwise rows wait in tips_event_outbox. Any number of processes
+ * relay the one table: the SDK claims due rows with a lease (FOR UPDATE SKIP LOCKED).
  */
 const { createClient } = require('openvibe-sdk/core');
 const { createServiceTokenClient } = require('openvibe-sdk/auth');
-const { createEventsClient, createOutbox } = require('openvibe-sdk/events');
+const { createEventsClient, createPgOutbox } = require('openvibe-sdk/events');
 
 const ACTOR = { type: 'service', id: 'tips' };
+const TABLE = 'tips_event_outbox';   // migrations/0001_initial.sql (outboxSchema)
 
 function createTipsOutbox({ db, config, fetchImpl, now, log = console }) {
     const enabled = !!(config.events.url && config.oauth.clientSecret);
@@ -35,8 +37,9 @@ function createTipsOutbox({ db, config, fetchImpl, now, log = console }) {
     }
     const events = createEventsClient(createClient(clientOpts), { source: 'tips' });
     let lastError = null;
-    const outbox = createOutbox(db, {
+    const outbox = createPgOutbox(db, {
         events,
+        table: TABLE,
         intervalMs: config.events.intervalMs,
         now,
         onError: (err) => {
@@ -45,11 +48,10 @@ function createTipsOutbox({ db, config, fetchImpl, now, log = console }) {
             lastError = msg;
         },
     });
-    outbox.ensureSchema();
 
-    /** Inside the caller's transaction. */
-    function emit(eventType, subject, payload, { visibility = 'internal', priority = 'important', traceparent } = {}) {
-        return outbox.enqueue({ event_type: eventType, actor: ACTOR, subject, payload, visibility, priority }, { traceparent });
+    /** Inside the caller's transaction `t`. */
+    function emit(t, eventType, subject, payload, { visibility = 'internal', priority = 'important', traceparent } = {}) {
+        return outbox.enqueue(t, { event_type: eventType, actor: ACTOR, subject, payload, visibility, priority }, { traceparent });
     }
 
     return {
@@ -59,8 +61,8 @@ function createTipsOutbox({ db, config, fetchImpl, now, log = console }) {
         start() { if (enabled) outbox.start(); },
         stop: () => outbox.stop(),
         kick() { if (enabled) outbox.kick(); },
-        status: () => ({ enabled, pending: outbox.pending(), rejected: outbox.rejected(), last_error: lastError }),
+        status: async () => ({ enabled, pending: await outbox.pending(), rejected: await outbox.rejected(), last_error: lastError }),
     };
 }
 
-module.exports = { createTipsOutbox };
+module.exports = { createTipsOutbox, TABLE };

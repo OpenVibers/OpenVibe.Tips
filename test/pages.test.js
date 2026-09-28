@@ -82,7 +82,7 @@ const { boot, check, done } = require('./helpers/app');
         const loc = r.headers.get('location');
         assert.match(loc, /^\/receipts\/tint_/);
         const id = loc.split('/').pop();
-        assert.strictEqual(domain.interactions.get(id).payment_state, 'settled');
+        assert.strictEqual((await domain.interactions.get(t.db, id)).payment_state, 'settled');
         // Double submit (same form nonce): the same interaction, no second transfer.
         const before = billing.transfers().length;
         const again = await post('/alex/tip', viewer, form);
@@ -106,7 +106,7 @@ const { boot, check, done } = require('./helpers/app');
         assert.strictEqual(r2.status, 403, 'a token minted for someone else does not work');
         const d = await post('/dashboard/profile', alex, { csrf: 'nope', page_enabled: '0' });
         assert.strictEqual(d.status, 403);
-        assert.strictEqual(domain.profiles.byHandle('alex').page_enabled, true);
+        assert.strictEqual((await domain.profiles.byHandle(t.db, 'alex')).page_enabled, true);
     });
 
     await check('the form reports Billing\'s refusal in words; checkout redirects to the provider', async () => {
@@ -138,10 +138,10 @@ const { boot, check, done } = require('./helpers/app');
         assert.strictEqual(g.status, 303);
         const sim = await post('/dashboard/simulate', alex, { csrf, idem: 'x', kind: 'tip', amount: '100', supporter_name: 'Test supporter', message: 'test' });
         assert.strictEqual(sim.status, 303);
-        assert.strictEqual(t.db.prepare("SELECT COUNT(*) AS n FROM tip_interactions WHERE creator_subject = ? AND test = 1").get(alex.subject).n, 1);
-        const off = await post('/dashboard/profile', alex, { csrf, idem: 'x', accepting: '1', revision: String(domain.profiles.byHandle('alex').revision) });
+        assert.strictEqual(await t.db.value('SELECT count(*) FROM tip_interactions WHERE creator_subject = $1 AND test', [alex.subject]), 1);
+        const off = await post('/dashboard/profile', alex, { csrf, idem: 'x', accepting: '1', revision: String((await domain.profiles.byHandle(t.db, 'alex')).revision) });
         assert.strictEqual(off.status, 303);
-        assert.strictEqual(domain.profiles.byHandle('alex').page_enabled, false, 'an unchecked box switches the page off');
+        assert.strictEqual((await domain.profiles.byHandle(t.db, 'alex')).page_enabled, false, 'an unchecked box switches the page off');
         assert.strictEqual((await get('/alex')).status, 404);
     });
 

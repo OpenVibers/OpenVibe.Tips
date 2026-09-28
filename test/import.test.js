@@ -81,61 +81,61 @@ function billingFixture(file, subjects, { withNative = false } = {}) {
         const r = await run({ dryRun: true });
         assert.strictEqual(r.dry_run, true);
         assert.ok(r.counts.imported > 0);
-        assert.strictEqual(t.db.prepare('SELECT COUNT(*) AS n FROM tip_interactions').get().n, 0);
-        assert.strictEqual(t.db.prepare('SELECT COUNT(*) AS n FROM migration_maps').get().n, 0);
+        assert.strictEqual(await t.db.value('SELECT count(*) FROM tip_interactions'), 0);
+        assert.strictEqual(await t.db.value('SELECT count(*) FROM migration_maps'), 0);
     });
 
     let report;
     await check('donations import settled and linked to Billing; failed excluded; unmapped creators held; test era flagged', async () => {
         report = await run();
-        const byLegacy = (id) => t.db.prepare('SELECT * FROM tip_interactions WHERE legacy_source = ?').get(`live:transactions:${id}`);
-        const two = byLegacy(2);
+        const byLegacy = (id) => t.db.maybe('SELECT * FROM tip_interactions WHERE legacy_source = $1', [`live:transactions:${id}`]);
+        const two = await byLegacy(2);
         assert.strictEqual(two.payment_state, 'settled');
         assert.strictEqual(two.settlement, 'imported');
         assert.strictEqual(two.billing_txn_id, 'txn_import_2');
         assert.strictEqual(two.supporter_subject, subjects[2]);
         assert.strictEqual(two.message, 'nice');
         assert.strictEqual(two.created_at, '2026-02-01T10:00:00.000Z');
-        assert.strictEqual(byLegacy(1).test, 1, 'before stats_vibes_reset_at');
-        const ghost = byLegacy(3);
+        assert.strictEqual((await byLegacy(1)).test, true, 'before stats_vibes_reset_at');
+        const ghost = await byLegacy(3);
         assert.strictEqual(ghost.supporter_subject, null);
         assert.strictEqual(ghost.supporter_name, 'Ghost');
-        assert.strictEqual(byLegacy(6).kind, 'media_request');
-        assert.strictEqual(byLegacy(8).funding, 'provider');
-        assert.strictEqual(byLegacy(4), undefined, 'held, not dropped');
-        const held = t.db.prepare("SELECT * FROM migration_maps WHERE source_table = 'transactions' AND source_id = '4'").get();
+        assert.strictEqual((await byLegacy(6)).kind, 'media_request');
+        assert.strictEqual((await byLegacy(8)).funding, 'provider');
+        assert.strictEqual(await byLegacy(4), null, 'held, not dropped');
+        const held = await t.db.maybe("SELECT * FROM migration_maps WHERE source_table = 'transactions' AND source_id = '4'");
         assert.strictEqual(held.status, 'held');
-        const excluded = t.db.prepare("SELECT * FROM migration_maps WHERE source_table = 'transactions' AND source_id = '5'").get();
+        const excluded = await t.db.maybe("SELECT * FROM migration_maps WHERE source_table = 'transactions' AND source_id = '5'");
         assert.strictEqual(excluded.status, 'excluded');
         assert.match(excluded.reason, /status failed/);
         assert.strictEqual(report.counts.linked_to_billing, report.counts.imported);
         // Imports are history: no effects, no overlay alerts, no events.
-        assert.strictEqual(t.db.prepare('SELECT COUNT(*) AS n FROM interaction_effects').get().n, 0);
-        assert.strictEqual(t.db.prepare('SELECT COUNT(*) AS n FROM overlay_deliveries').get().n, 0);
-        assert.strictEqual(t.outboxRows('tips.interaction.ready').length, 0);
+        assert.strictEqual(await t.db.value('SELECT count(*) FROM interaction_effects'), 0);
+        assert.strictEqual(await t.db.value('SELECT count(*) FROM overlay_deliveries'), 0);
+        assert.strictEqual((await t.outboxRows('tips.interaction.ready')).length, 0);
     });
 
     await check('the refund nets out against the donation it undoes', async () => {
-        const six = t.db.prepare("SELECT * FROM tip_interactions WHERE legacy_source = 'live:transactions:6'").get();
+        const six = await t.db.maybe("SELECT * FROM tip_interactions WHERE legacy_source = 'live:transactions:6'");
         assert.strictEqual(six.reversed_bits, 250);
         assert.strictEqual(six.payment_state, 'reversed');
         assert.strictEqual(report.counts.refunds_applied, 1);
     });
 
     await check('external PowerChat tips: the direct one is imported as EXTERNAL; the site-routed celebration is not counted twice', async () => {
-        const ext = t.db.prepare("SELECT * FROM tip_interactions WHERE legacy_source = 'live:chat_messages:2'").get();
+        const ext = await t.db.maybe("SELECT * FROM tip_interactions WHERE legacy_source = 'live:chat_messages:2'");
         assert.strictEqual(ext.settlement, 'external');
         assert.strictEqual(ext.amount, 700);
         assert.strictEqual(ext.supporter_name, 'Direct');
-        const twin = t.db.prepare("SELECT * FROM migration_maps WHERE source_table = 'chat_messages' AND source_id = '1'").get();
+        const twin = await t.db.maybe("SELECT * FROM migration_maps WHERE source_table = 'chat_messages' AND source_id = '1'");
         assert.strictEqual(twin.status, 'excluded');
         assert.match(twin.reason, /site-routed tip \(Live transaction 8\)/);
-        assert.strictEqual(t.db.prepare("SELECT COUNT(*) AS n FROM migration_maps WHERE source_table = 'chat_messages' AND source_id = '3'").get().n, 0, 'on-site donation lines are not PowerChat');
+        assert.strictEqual(await t.db.value("SELECT count(*) FROM migration_maps WHERE source_table = 'chat_messages' AND source_id = '3'"), 0, 'on-site donation lines are not PowerChat');
     });
 
     await check('goals import with Live\'s current amount carried over (not invented contributions)', async () => {
-        const g = t.db.prepare("SELECT * FROM tip_goals WHERE legacy_source = 'live:donation_goals:1'").get();
-        const view = domain.goals.present(g);
+        const g = await t.db.maybe("SELECT * FROM tip_goals WHERE legacy_source = 'live:donation_goals:1'");
+        const view = await domain.goals.present(t.db, g);
         assert.strictEqual(view.current_amount, 1200);
         assert.strictEqual(view.carried_over_amount, 1200);
         assert.strictEqual(view.supporters_count, 0);
@@ -154,34 +154,34 @@ function billingFixture(file, subjects, { withNative = false } = {}) {
         const evTest = t.billing.envelope('billing.transaction.settled', { transaction_id: 'txn_native_test', type: 'donation', test: true, from_subject: subjects[2], to_subject: subjects[1], provider: null, metadata: { kind: 'donation', amount_bits: 999 } }, 'txn_native_test');
         await t.deliver(evTest);
         const { reconcile } = require('../server/importer/live');
-        const r = reconcile(domain, billingSnapshotSource(bdb));
+        const r = await reconcile(domain, billingSnapshotSource(bdb));
         assert.strictEqual(r.ok, true, JSON.stringify(r.mismatches));
-        assert.strictEqual(domain.interactions.totals(subjects[1]).settled_via_billing, 740);
-        assert.strictEqual(domain.interactions.totals(subjects[1]).external, 700);
+        assert.strictEqual((await domain.interactions.totals(t.db, subjects[1])).settled_via_billing, 740);
+        assert.strictEqual((await domain.interactions.totals(t.db, subjects[1])).external, 700);
     });
 
     await check('a re-run changes nothing; a newly mapped creator is released from hold', async () => {
-        const before = t.db.prepare('SELECT COUNT(*) AS n FROM tip_interactions').get().n;
+        const before = await t.db.value('SELECT count(*) FROM tip_interactions');
         const again = await run();
         assert.strictEqual(again.counts.imported, 0);
         assert.strictEqual(again.counts.goals, 0);
         assert.ok(again.counts.unchanged > 0);
-        assert.strictEqual(t.db.prepare('SELECT COUNT(*) AS n FROM tip_interactions').get().n, before);
+        assert.strictEqual(await t.db.value('SELECT count(*) FROM tip_interactions'), before);
         const heldUser = t.network.newUser('held', 4);
         const r = await run();
         assert.strictEqual(r.counts.released, 1);
         assert.strictEqual(r.counts.goals, 1);
-        const four = t.db.prepare("SELECT * FROM tip_interactions WHERE legacy_source = 'live:transactions:4'").get();
+        const four = await t.db.maybe("SELECT * FROM tip_interactions WHERE legacy_source = 'live:transactions:4'");
         assert.strictEqual(four.creator_subject, heldUser.subject);
         assert.strictEqual(four.billing_txn_id, 'txn_import_4');
-        assert.strictEqual(t.db.prepare("SELECT status FROM migration_maps WHERE source_table = 'transactions' AND source_id = '4'").get().status, 'imported');
+        assert.strictEqual(await t.db.value("SELECT status FROM migration_maps WHERE source_table = 'transactions' AND source_id = '4'"), 'imported');
     });
 
     await check('every source row is imported, excluded with a reason, or held — none silently dropped', async () => {
         const tipRows = live.prepare("SELECT id FROM transactions WHERE type IN ('donation', 'refund')").all().map((x) => String(x.id));
-        const mapped = new Set(t.db.prepare("SELECT source_id FROM migration_maps WHERE source_table = 'transactions'").all().map((x) => x.source_id));
+        const mapped = new Set((await t.db.many("SELECT source_id FROM migration_maps WHERE source_table = 'transactions'")).map((x) => x.source_id));
         assert.deepStrictEqual(tipRows.filter((id) => !mapped.has(id)), []);
-        const excluded = t.db.prepare("SELECT * FROM migration_maps WHERE status = 'excluded'").all();
+        const excluded = await t.db.many("SELECT * FROM migration_maps WHERE status = 'excluded'");
         assert.ok(excluded.every((x) => x.reason));
     });
 

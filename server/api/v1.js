@@ -40,7 +40,7 @@
  */
 const express = require('express');
 const { http } = require('openvibe-contracts');
-const { TipsError, fail, userSubject, displayName } = require('../util');
+const { TipsError, fail, userSubject, displayName, inputError } = require('../util');
 const { idempotent } = require('./idempotency');
 
 const CAP = {
@@ -67,7 +67,7 @@ const CAP = {
 function v1Router({ domain, apiAuth, limits }) {
     const r = express.Router();
     const { db, profiles, goals, interactions, overlays } = domain;
-    const idem = idempotent(db, domain.now);
+    const idem = idempotent(db, domain.now, domain.log);
 
     // Per-actor limits (api/actor-limits.js), after the credential and before any work: every read takes
     // the defaults; each write below names its own, tighter numbers.
@@ -86,40 +86,40 @@ function v1Router({ domain, apiAuth, limits }) {
         return null;
     }
     /** The creator a call is about: body/query `creator` (subject or handle), or the signed-in user. */
-    function creatorOf(req, value, { mustExist = true } = {}) {
+    async function creatorOf(req, value, { mustExist = true } = {}) {
         const v = value != null && value !== '' ? value : (req.principal.kind === 'user' ? req.principal.subject : null);
         if (!v) fail(422, 'tips.invalid_input', 'creator is required');
         const ref = typeof v === 'object' ? userSubject(v, 'creator') : String(v);
-        const profile = ref === 'me' && req.principal.kind === 'user' ? profiles.bySubject(req.principal.subject) : profiles.resolve(ref);
+        const profile = ref === 'me' && req.principal.kind === 'user' ? await profiles.bySubject(db, req.principal.subject) : await profiles.resolve(db, ref);
         if (!profile && mustExist) fail(404, 'tips.creator_not_found', 'no tip profile for this creator');
         return profile;
     }
     const write = (handler) => [idem, wrap(handler)];
 
     // ── Profiles ─────────────────────────────────────────────
-    r.get('/profiles/:creator', wrap((req, res) => {
-        const p = creatorOf(req, req.params.creator);
+    r.get('/profiles/:creator', wrap(async (req, res) => {
+        const p = await creatorOf(req, req.params.creator);
         const who = req.principal;
         const mine = who.kind === 'user' && who.subject === p.creator_subject;
         const svc = who.kind === 'service' && apiAuth.granted(who, CAP.profileGet);
         // A page that is switched off does not exist for anyone but its creator and granted services.
         if (!p.page_enabled && !mine && !svc) fail(404, 'tips.creator_not_found', 'no tip profile for this creator');
         const owner = mine || svc;
-        const active = goals.list(p.creator_subject, { status: 'active' });
-        res.json({ profile: profiles.present(p, { owner }), goals: active.map((g) => (owner ? goals.present(g) : goals.publicGoal(g, p.page))) });
+        const active = await goals.list(db, p.creator_subject, { status: 'active' });
+        res.json({ profile: profiles.present(p, { owner }), goals: owner ? await goals.presentMany(db, active) : await goals.publicGoals(db, active, p) });
     }));
 
     /** The supporters page: top supporters and recent public messages, as the creator chose to show them. */
-    r.get('/profiles/:creator/supporters', wrap((req, res) => {
-        const p = creatorOf(req, req.params.creator);
+    r.get('/profiles/:creator/supporters', wrap(async (req, res) => {
+        const p = await creatorOf(req, req.params.creator);
         const who = req.principal;
         const owner = (who.kind === 'user' && who.subject === p.creator_subject) || (who.kind === 'service' && apiAuth.granted(who, CAP.profileGet));
         if (!owner && (!p.page_enabled || !p.page.supporters_page)) fail(404, 'tips.supporters_not_public', 'this creator does not show their supporters');
         const page = p.page;
         res.json({
             creator: { type: 'user', id: p.creator_subject }, page,
-            leaderboard: interactions.leaderboard(p.creator_subject).map((row) => (page.supporters_amounts ? row : { ...row, total: null })),
-            recent: page.supporters_messages ? interactions.recentPublic(p.creator_subject).map((v) => (page.supporters_amounts ? v : { ...v, amount: null })) : null,
+            leaderboard: (await interactions.leaderboard(db, p)).map((row) => (page.supporters_amounts ? row : { ...row, total: null })),
+            recent: page.supporters_messages ? (await interactions.recentPublic(db, p)).map((v) => (page.supporters_amounts ? v : { ...v, amount: null })) : null,
         });
     }));
 
@@ -128,34 +128,34 @@ function v1Router({ domain, apiAuth, limits }) {
         if (req.principal.kind !== 'user') fail(req.principal.kind === 'anonymous' ? 401 : 403, req.principal.kind === 'anonymous' ? 'token.missing' : 'tips.people_only', 'only the person themselves (a Network user token) can do this');
         return req.principal.subject;
     };
-    r.get('/me/export', wrap((req, res) => res.json(interactions.exportFor(person(req)))));
+    r.get('/me/export', wrap(async (req, res) => res.json(await interactions.exportFor(person(req)))));
     // A person erasing their own tips does it once; the network's account deletion arrives through
     // /internal/events, which is never limited.
-    r.post('/me/erase', limits('tips.me.erase', { minute: 3, hour: 10 }), ...write((req, res) => res.json(interactions.erase(person(req)))));
+    r.post('/me/erase', limits('tips.me.erase', { minute: 3, hour: 10 }), ...write(async (req, res) => res.json(await interactions.erase(person(req)))));
 
-    r.patch('/profiles/:creator', edit, ...write((req, res) => {
+    r.patch('/profiles/:creator', edit, ...write(async (req, res) => {
         const b = req.body || {};
         let p;
         if (req.params.creator === 'me') {
             if (req.principal.kind !== 'user') fail(401, 'token.missing', '`me` needs a user token');
-            p = profiles.ensure(req.principal.subject, { username: req.principal.username, displayName: req.principal.name, avatarUrl: req.principal.avatar });
-        } else if (req.principal.kind === 'service' && /^usr_/.test(req.params.creator) && !profiles.bySubject(req.params.creator)) {
+            p = await profiles.ensure(req.principal.subject, { username: req.principal.username, displayName: req.principal.name, avatarUrl: req.principal.avatar });
+        } else if (req.principal.kind === 'service' && /^usr_/.test(req.params.creator) && !(await profiles.bySubject(db, req.params.creator))) {
             allow(req, CAP.profileUpdate);
             // A service opening a profile for a creator names the account projection it knows.
             if (!b.handle) fail(422, 'tips.invalid_input', 'handle is required to create a profile');
-            p = profiles.ensure(userSubject(req.params.creator, 'creator'), { username: b.handle, displayName: b.display_name || b.handle, avatarUrl: b.avatar_url });
+            p = await profiles.ensure(userSubject(req.params.creator, 'creator'), { username: b.handle, displayName: b.display_name || b.handle, avatarUrl: b.avatar_url });
         } else {
-            p = creatorOf(req, req.params.creator);
+            p = await creatorOf(req, req.params.creator);
         }
         allow(req, CAP.profileUpdate, p.creator_subject);
-        const out = profiles.update(p.creator_subject, b, { expectedRevision: b.revision });
+        const out = await profiles.update(p.creator_subject, b, { expectedRevision: b.revision });
         res.json({ profile: profiles.present(out, { owner: true }) });
     }));
 
-    r.get('/profiles/:creator/totals', wrap((req, res) => {
-        const p = creatorOf(req, req.params.creator);
+    r.get('/profiles/:creator/totals', wrap(async (req, res) => {
+        const p = await creatorOf(req, req.params.creator);
         allow(req, CAP.interactionList, p.creator_subject);
-        res.json({ creator: { type: 'user', id: p.creator_subject }, totals: interactions.totals(p.creator_subject) });
+        res.json({ creator: { type: 'user', id: p.creator_subject }, totals: await interactions.totals(db, p.creator_subject) });
     }));
 
     // ── Paid requests (checkout / credit) ────────────────────
@@ -174,28 +174,27 @@ function v1Router({ domain, apiAuth, limits }) {
                 supporter = p.subject;
                 supporterName = displayName(b.supporter_name) || p.name || p.username;
             }
-            const profile = creatorOf(req, b.creator);
+            const profile = await creatorOf(req, b.creator);
             const funding = b.pay_with || 'credit';
             const tp = req.ov && req.ov.traceparent;
-            const { interaction, replay } = interactions.request(profile, { ...b, kind }, { supporter, supporterName, funding, idempotencyKey: req.idempotencyKey });
+            const { interaction, replay } = await interactions.request(profile, { ...b, kind }, { supporter, supporterName, funding, idempotencyKey: req.idempotencyKey });
             let i = interaction;
-            let checkout = null;
+            const viewer = p.kind === 'service' ? 'service' : 'supporter';
             if (!replay) {
                 if (funding === 'credit') {
                     const out = await interactions.transfer(i, { traceparent: tp });
-                    i = interactions.get(i.id);
+                    i = await interactions.get(db, i.id);
                     if (out.refused) {
-                        fail(out.refused === 'billing.insufficient_funds' ? 409 : 422, out.refused, out.detail || 'Billing refused the tip', { interaction: interactions.present(i, { viewer: 'supporter' }) });
+                        fail(out.refused === 'billing.insufficient_funds' ? 409 : 422, out.refused, out.detail || 'Billing refused the tip', { interaction: await interactions.present(db, i, { viewer: 'supporter' }) });
                     }
                 } else {
-                    checkout = await interactions.startCheckout(i, { provider: b.provider, traceparent: tp });
-                    i = checkout.interaction;
+                    i = (await interactions.startCheckout(i, { provider: b.provider, traceparent: tp })).interaction;
                 }
             } else if (i.payment_state === 'failed') {
-                fail(409, 'tips.payment_failed', i.failure || 'the payment for this request failed', { interaction: interactions.present(i, { viewer: 'supporter' }) });
+                fail(409, 'tips.payment_failed', i.failure || 'the payment for this request failed', { interaction: await interactions.present(db, i, { viewer: 'supporter' }) });
             }
             res.status(replay ? 200 : 201).json({
-                interaction: interactions.present(i, { viewer: p.kind === 'service' ? 'service' : 'supporter' }),
+                interaction: await interactions.present(db, i, { viewer }),
                 checkout_url: i.checkout_url || null, checkout_ref: i.checkout_ref || null,
             });
         });
@@ -212,27 +211,29 @@ function v1Router({ domain, apiAuth, limits }) {
     r.post('/media-requests', pays, ...paid('media_request', CAP.media));
 
     // ── Interactions ─────────────────────────────────────────
-    r.get('/interactions', wrap((req, res) => {
+    // The hottest list: a keyset page of any size costs three queries (the page, the creators' filters,
+    // the effects) — test/query-budget.test.js holds it there.
+    r.get('/interactions', wrap(async (req, res) => {
         const p = req.principal;
         const q = req.query;
         let filter;
         if (p.kind === 'service') {
             allow(req, CAP.interactionList);
             filter = {
-                creator: q.creator ? (creatorOf(req, q.creator).creator_subject) : null,
+                creator: q.creator ? (await creatorOf(req, q.creator)).creator_subject : null,
                 supporter: q.supporter ? userSubject(String(q.supporter), 'supporter') : null,
             };
             if (!filter.creator && !filter.supporter) fail(422, 'tips.invalid_input', 'creator or supporter is required');
         } else if (p.kind === 'user') {
             filter = q.as === 'creator' ? { creator: p.subject } : { supporter: p.subject };
         } else fail(401, 'token.missing', 'sign in to see receipts');
-        const out = interactions.list({ ...filter, includeTest: q.include_test !== '0', cursor: q.cursor, limit: q.limit });
+        const out = await interactions.list(db, { ...filter, includeTest: q.include_test !== '0', cursor: q.cursor, limit: q.limit });
         const viewer = p.kind === 'service' ? 'service' : (filter.creator ? 'owner' : 'supporter');
-        res.json({ interactions: out.rows.map((i) => interactions.present(i, { viewer })), next_cursor: out.next_cursor });
+        res.json({ interactions: await interactions.presentMany(db, out.rows, { viewer }), next_cursor: out.next_cursor });
     }));
 
-    r.get('/interactions/:id', wrap((req, res) => {
-        const i = interactions.get(req.params.id);
+    r.get('/interactions/:id', wrap(async (req, res) => {
+        const i = await interactions.get(db, req.params.id);
         const p = req.principal;
         if (!i) fail(404, 'tips.interaction_not_found', 'no such interaction');
         let viewer;
@@ -241,164 +242,160 @@ function v1Router({ domain, apiAuth, limits }) {
         else if (p.kind === 'user' && p.subject === i.supporter_subject) viewer = 'supporter';
         else if (p.kind === 'anonymous') fail(401, 'token.missing', 'sign in to see this receipt');
         else fail(404, 'tips.interaction_not_found', 'no such interaction');
-        res.json({ interaction: interactions.present(i, { viewer }) });
+        res.json({ interaction: await interactions.present(db, i, { viewer }) });
     }));
 
     // A service importing tips made elsewhere records one per tip, at most one a second.
-    r.post('/interactions/external', limits('tips.interaction.record', { minute: 60, hour: 1200 }), ...write((req, res) => {
+    r.post('/interactions/external', limits('tips.interaction.record', { minute: 60, hour: 1200 }), ...write(async (req, res) => {
         allow(req, CAP.interactionRecord);
         const b = req.body || {};
-        const profile = creatorOf(req, b.creator);
-        const out = interactions.recordExternal(profile, b);
-        res.status(out.replay ? 200 : 201).json({ interaction: interactions.present(out.interaction, { viewer: 'service' }), duplicate: out.replay });
+        const profile = await creatorOf(req, b.creator);
+        const out = await interactions.recordExternal(profile, b);
+        res.status(out.replay ? 200 : 201).json({ interaction: await interactions.present(db, out.interaction, { viewer: 'service' }), duplicate: out.replay });
     }));
 
     // ── Goals ────────────────────────────────────────────────
-    function goalVisible(req, g) {
-        const profile = profiles.bySubject(g.creator_subject);
-        if (profile && profile.page_enabled) return true;
-        const p = req.principal;
-        return (p.kind === 'user' && p.subject === g.creator_subject) || (p.kind === 'service' && apiAuth.granted(p, CAP.goalUpdate));
-    }
-    const goalOwner = (req, creator) => (req.principal.kind === 'user' && req.principal.subject === creator) || (req.principal.kind === 'service' && apiAuth.granted(req.principal, CAP.goalUpdate));
-    r.get('/goals', wrap((req, res) => {
-        const profile = creatorOf(req, req.query.creator);
-        const sample = { creator_subject: profile.creator_subject };
-        if (!goalVisible(req, sample)) fail(404, 'tips.creator_not_found', 'no tip profile for this creator');
+    const isOwner = (req, creator) => (req.principal.kind === 'user' && req.principal.subject === creator) || (req.principal.kind === 'service' && apiAuth.granted(req.principal, CAP.goalUpdate));
+    r.get('/goals', wrap(async (req, res) => {
+        const profile = await creatorOf(req, req.query.creator);
+        const full = isOwner(req, profile.creator_subject);
+        if (!profile.page_enabled && !full) fail(404, 'tips.creator_not_found', 'no tip profile for this creator');
         const status = ['active', 'closed'].includes(req.query.status) ? req.query.status : undefined;
-        const full = goalOwner(req, profile.creator_subject);
-        res.json({ goals: goals.list(profile.creator_subject, { status }).map((g) => (full ? goals.present(g) : goals.publicGoal(g, profile.page))) });
+        const list = await goals.list(db, profile.creator_subject, { status });
+        res.json({ goals: full ? await goals.presentMany(db, list) : await goals.publicGoals(db, list, profile) });
     }));
-    r.get('/goals/:id', wrap((req, res) => {
-        const g = goals.get(req.params.id);
-        if (!g || !goalVisible(req, g)) fail(404, 'tips.goal_not_found', 'no such goal');
-        if (!goalOwner(req, g.creator_subject)) return res.json({ goal: goals.publicGoal(g, profiles.bySubject(g.creator_subject).page) });
-        res.json({ goal: goals.present(g, { contributions: true }) });
+    r.get('/goals/:id', wrap(async (req, res) => {
+        const g = await goals.get(db, req.params.id);
+        const profile = g && await profiles.bySubject(db, g.creator_subject);
+        const full = g && isOwner(req, g.creator_subject);
+        if (!g || (!(profile && profile.page_enabled) && !full)) fail(404, 'tips.goal_not_found', 'no such goal');
+        if (!full) return res.json({ goal: await goals.publicGoal(db, g, profile) });
+        res.json({ goal: await goals.present(db, g, { contributions: true }) });
     }));
-    r.post('/goals', edit, ...write((req, res) => {
+    r.post('/goals', edit, ...write(async (req, res) => {
         const b = req.body || {};
-        const profile = creatorOf(req, b.creator);
+        const profile = await creatorOf(req, b.creator);
         allow(req, CAP.goalCreate, profile.creator_subject);
-        res.status(201).json({ goal: goals.create(profile.creator_subject, b) });
+        res.status(201).json({ goal: await goals.create(profile.creator_subject, b) });
     }));
-    const ownGoal = (req, cap) => {
-        const g = goals.get(req.params.id);
+    const ownGoal = async (req, cap) => {
+        const g = await goals.get(db, req.params.id);
         if (!g) fail(404, 'tips.goal_not_found', 'no such goal');
         allow(req, cap, g.creator_subject);
         return g;
     };
-    r.patch('/goals/:id', edit, ...write((req, res) => res.json({ goal: goals.update(ownGoal(req, CAP.goalUpdate), req.body || {}) })));
-    r.post('/goals/:id/close', edit, ...write((req, res) => res.json({ goal: goals.close(ownGoal(req, CAP.goalClose)) })));
+    r.patch('/goals/:id', edit, ...write(async (req, res) => res.json({ goal: await goals.update(await ownGoal(req, CAP.goalUpdate), req.body || {}) })));
+    r.post('/goals/:id/close', edit, ...write(async (req, res) => res.json({ goal: await goals.close(await ownGoal(req, CAP.goalClose)) })));
 
     // ── Overlay tokens and configs ───────────────────────────
-    r.get('/overlay-tokens', wrap((req, res) => {
-        const profile = creatorOf(req, req.query.creator);
+    r.get('/overlay-tokens', wrap(async (req, res) => {
+        const profile = await creatorOf(req, req.query.creator);
         allow(req, CAP.tokenCreate, profile.creator_subject);
-        res.json({ tokens: overlays.listTokens(profile.creator_subject).map(overlays.presentToken) });
+        res.json({ tokens: (await overlays.listTokens(db, profile.creator_subject)).map(overlays.presentToken) });
     }));
     // A token opens an overlay's event stream: a creator mints a few for their scenes.
-    r.post('/overlay-tokens', limits('tips.overlay.token.create', { minute: 10, hour: 60 }), ...write((req, res) => {
+    r.post('/overlay-tokens', limits('tips.overlay.token.create', { minute: 10, hour: 60 }), ...write(async (req, res) => {
         const b = req.body || {};
-        const profile = creatorOf(req, b.creator);
+        const profile = await creatorOf(req, b.creator);
         allow(req, CAP.tokenCreate, profile.creator_subject);
         const by = req.principal.kind === 'service' ? req.principal.sub : req.principal.subject;
-        const out = overlays.createToken(profile.creator_subject, { scopes: b.scopes, label: b.label, configId: b.config_id, createdBy: by });
+        const out = await overlays.createToken(profile.creator_subject, { scopes: b.scopes, label: b.label, configId: b.config_id, createdBy: by });
         // Shown once: only its hash is stored, and the stored answer for an Idempotency-Key replay has no
         // secret either (a caller who lost the answer revokes the token and creates another).
         res.locals.storedBody = { token: out.token, secret: null, overlay_url: null, events_url: null, note: 'the secret is shown once; revoke this token and create another' };
         res.status(201).json({ token: out.token, secret: out.secret, overlay_url: out.overlay_url, events_url: out.events_url });
     }));
-    r.post('/overlay-tokens/:id/revoke', edit, ...write((req, res) => {
-        const t = overlays.getToken(req.params.id);
+    r.post('/overlay-tokens/:id/revoke', edit, ...write(async (req, res) => {
+        const t = await overlays.getToken(db, req.params.id);
         if (!t) fail(404, 'tips.overlay_token_not_found', 'no such overlay token');
         allow(req, CAP.tokenRevoke, t.creator_subject);
-        res.json({ token: overlays.revokeToken(t) });
+        res.json({ token: await overlays.revokeToken(t) });
     }));
 
-    r.get('/overlay-configs', wrap((req, res) => {
-        const profile = creatorOf(req, req.query.creator);
+    r.get('/overlay-configs', wrap(async (req, res) => {
+        const profile = await creatorOf(req, req.query.creator);
         allow(req, CAP.configGet, profile.creator_subject);
-        res.json({ configs: overlays.listConfigs(profile.creator_subject).map(overlays.presentConfig) });
+        res.json({ configs: (await overlays.listConfigs(db, profile.creator_subject)).map(overlays.presentConfig) });
     }));
-    r.get('/overlay-configs/:id', wrap((req, res) => {
-        const c = overlays.getConfig(req.params.id);
+    r.get('/overlay-configs/:id', wrap(async (req, res) => {
+        const c = await overlays.getConfig(db, req.params.id);
         if (!c) fail(404, 'tips.overlay_config_not_found', 'no such overlay config');
         allow(req, CAP.configGet, c.creator_subject);
         res.json({ config: overlays.presentConfig(c) });
     }));
-    r.post('/overlay-configs', edit, ...write((req, res) => {
+    r.post('/overlay-configs', edit, ...write(async (req, res) => {
         const b = req.body || {};
-        const profile = creatorOf(req, b.creator);
+        const profile = await creatorOf(req, b.creator);
         allow(req, CAP.configUpdate, profile.creator_subject);
-        res.status(201).json({ config: overlays.createConfig(profile.creator_subject, b) });
+        res.status(201).json({ config: await overlays.createConfig(profile.creator_subject, b) });
     }));
-    r.patch('/overlay-configs/:id', edit, ...write((req, res) => {
-        const c = overlays.getConfig(req.params.id);
+    r.patch('/overlay-configs/:id', edit, ...write(async (req, res) => {
+        const c = await overlays.getConfig(db, req.params.id);
         if (!c) fail(404, 'tips.overlay_config_not_found', 'no such overlay config');
         allow(req, CAP.configUpdate, c.creator_subject);
-        res.json({ config: overlays.updateConfig(c, req.body || {}) });
+        res.json({ config: await overlays.updateConfig(c, req.body || {}) });
     }));
 
     // ── Moderation (server/domain/moderation.js) ─────────────
     const { moderation } = domain;
     /** The creator, one of their moderators, or a service with tips.interaction.moderate. */
-    function moderatorOf(req, creator, { hideExistence = false } = {}) {
+    async function moderatorOf(req, creator, { hideExistence = false } = {}) {
         const p = req.principal;
         if (p.kind === 'anonymous') fail(401, 'token.missing', 'sign in (a Network user token) or present a service token');
-        const a = moderation.actorFor(p, creator, p.kind === 'service' && apiAuth.granted(p, CAP.moderate));
+        const a = await moderation.actorFor(db, p, creator, p.kind === 'service' && apiAuth.granted(p, CAP.moderate));
         if (a) return a;
         if (p.kind === 'service') fail(403, 'capability.denied', `${CAP.moderate} not granted`);
         if (hideExistence) fail(404, 'tips.interaction_not_found', 'no such interaction');
         fail(403, 'tips.forbidden', 'only the creator and their moderators moderate this page');
         return null;
     }
-    r.get('/moderation', wrap((req, res) => {
-        const profile = creatorOf(req, req.query.creator);
-        moderatorOf(req, profile.creator_subject);
-        const out = moderation.queue(profile.creator_subject, { state: req.query.state || 'all', cursor: req.query.cursor, limit: req.query.limit });
+    r.get('/moderation', wrap(async (req, res) => {
+        const profile = await creatorOf(req, req.query.creator);
+        await moderatorOf(req, profile.creator_subject);
+        const out = await moderation.queue(db, profile.creator_subject, { state: req.query.state || 'all', cursor: req.query.cursor, limit: req.query.limit });
         res.json({ creator: { type: 'user', id: profile.creator_subject }, interactions: out.rows, next_cursor: out.next_cursor });
     }));
-    r.get('/moderation/log', wrap((req, res) => {
-        const profile = creatorOf(req, req.query.creator);
+    r.get('/moderation/log', wrap(async (req, res) => {
+        const profile = await creatorOf(req, req.query.creator);
         allow(req, CAP.moderate, profile.creator_subject);
-        res.json({ log: moderation.log(profile.creator_subject) });
+        res.json({ log: await moderation.log(db, profile.creator_subject) });
     }));
     for (const action of ['hide', 'restore']) {
-        r.post(`/interactions/:id/${action}`, moderate, ...write((req, res) => {
-            const i = interactions.get(req.params.id);
+        r.post(`/interactions/:id/${action}`, moderate, ...write(async (req, res) => {
+            const i = await interactions.get(db, req.params.id);
             if (!i) fail(404, 'tips.interaction_not_found', 'no such interaction');
-            const actor = moderatorOf(req, i.creator_subject, { hideExistence: true });
-            const out = moderation[action](i, { ...actor, reason: (req.body || {}).reason });
-            res.json({ interaction: moderation.present(out.interaction), changed: out.changed, cancelled_effects: out.cancelled_effects || [] });
+            const actor = await moderatorOf(req, i.creator_subject, { hideExistence: true });
+            const out = await moderation[action](i, { ...actor, reason: (req.body || {}).reason });
+            res.json({ interaction: await moderation.present(db, out.interaction), changed: out.changed, cancelled_effects: out.cancelled_effects || [] });
         }));
     }
-    r.get('/moderators', wrap((req, res) => {
-        const profile = creatorOf(req, req.query.creator);
+    r.get('/moderators', wrap(async (req, res) => {
+        const profile = await creatorOf(req, req.query.creator);
         allow(req, CAP.profileUpdate, profile.creator_subject);
-        res.json({ moderators: moderation.listModerators(profile.creator_subject).map(moderation.presentModerator) });
+        res.json({ moderators: (await moderation.listModerators(db, profile.creator_subject)).map(moderation.presentModerator) });
     }));
-    r.post('/moderators', staffing, ...write((req, res) => {
+    r.post('/moderators', staffing, ...write(async (req, res) => {
         const b = req.body || {};
-        const profile = creatorOf(req, b.creator);
+        const profile = await creatorOf(req, b.creator);
         allow(req, CAP.profileUpdate, profile.creator_subject);
         const by = req.principal.kind === 'service' ? req.principal.sub : req.principal.subject;
-        res.status(201).json({ moderator: moderation.addModerator(profile.creator_subject, b.moderator, { name: b.name, addedBy: by }) });
+        res.status(201).json({ moderator: await moderation.addModerator(db, profile.creator_subject, b.moderator, { name: b.name, addedBy: by }) });
     }));
-    r.post('/moderators/:subject/remove', staffing, ...write((req, res) => {
-        const profile = creatorOf(req, (req.body || {}).creator);
+    r.post('/moderators/:subject/remove', staffing, ...write(async (req, res) => {
+        const profile = await creatorOf(req, (req.body || {}).creator);
         allow(req, CAP.profileUpdate, profile.creator_subject);
-        res.json(moderation.removeModerator(profile.creator_subject, req.params.subject));
+        res.json(await moderation.removeModerator(profile.creator_subject, req.params.subject));
     }));
 
     // ── Simulation ───────────────────────────────────────────
     // A simulated tip plays on the creator's overlays and chat like a real one.
-    r.post('/simulate', limits('tips.simulation.run', { minute: 10, hour: 100 }), ...write((req, res) => {
+    r.post('/simulate', limits('tips.simulation.run', { minute: 10, hour: 100 }), ...write(async (req, res) => {
         const b = req.body || {};
-        const profile = creatorOf(req, b.creator);
+        const profile = await creatorOf(req, b.creator);
         allow(req, CAP.simulate, profile.creator_subject);
         const by = req.principal.kind === 'service' ? req.principal.sub : req.principal.subject;
-        const i = interactions.simulate(profile, b, { by });
-        res.status(201).json({ interaction: interactions.present(i, { viewer: 'owner' }) });
+        const i = await interactions.simulate(profile, b, { by });
+        res.status(201).json({ interaction: await interactions.present(db, i, { viewer: 'owner' }) });
     }));
 
     return r;
@@ -416,6 +413,7 @@ function wrap(fn) {
 
 function sendError(req, res, e) {
     if (res.headersSent) return;
+    e = inputError(e) || e;
     if (e instanceof TipsError) {
         return http.sendProblem(res, e.status, e.code, { detail: e.detail || e.message, ctx: req.ov, extra: e.extra && e.status < 500 ? { details: e.extra } : undefined });
     }

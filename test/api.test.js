@@ -17,6 +17,7 @@ const { boot, check, done } = require('./helpers/app');
         assert.strictEqual(h.json.service, 'tips');
         const r = await t.call('GET', '/api/ready', { token: null });
         assert.strictEqual(r.json.ready, true);
+        assert.strictEqual(r.json.checks.db.detail.store, t.store.store, 'the store that answered: pglite here, postgresql on the containers');
         const rel = await t.call('GET', '/release.json', { token: null });
         assert.strictEqual(rel.json.service, 'tips');
         assert.deepStrictEqual(require('openvibe-contracts').validate('registry.release-manifest@1', rel.json).errors, []);
@@ -107,6 +108,38 @@ const { boot, check, done } = require('./helpers/app');
         assert.strictEqual(none.status, 400);
     });
 
+    await check('an Idempotency-Key is claimed before the handler runs: once at a time, a stale claim taken over, refusals released', async () => {
+        const goals = () => t.db.value('SELECT count(*) FROM tip_goals WHERE creator_subject = $1', [alex.subject]);
+        const before = await goals();
+        // Two at once: the handler runs once; the other answer is "in progress" or the replay.
+        const body = { title: 'Once only', target_amount: 70 };
+        const both = await Promise.all([1, 2].map(() => t.call('POST', '/api/v1/goals', { user: alex, body, key: 'goal-key-race-01' })));
+        assert.ok(both.every((r) => r.status === 201 || (r.status === 409 && r.json.code === 'idempotency.in_progress')), JSON.stringify(both.map((r) => r.status)));
+        assert.strictEqual(new Set(both.filter((r) => r.status === 201).map((r) => r.json.goal.id)).size, 1);
+        assert.strictEqual(await goals(), before + 1);
+        // A claim still in progress (as another process holds it): 409 with Retry-After.
+        const { stable } = require('../server/api/idempotency');
+        const hashOf = (b) => require('crypto').createHash('sha256').update(`POST /api/v1/goals\n${stable(b)}`).digest('hex');
+        const claim = (key, b, ageMs) => t.db.exec(`INSERT INTO api_idempotency (key, request_hash, method, path, status, response, created_at)
+            VALUES ($1, $2, 'POST', '/api/v1/goals', 0, '', $3)`, [`${alex.subject}:${key}`, hashOf(b), new Date(Date.now() - ageMs).toISOString()]);
+        await claim('goal-key-busy-0001', { title: 'Busy', target_amount: 5 }, 1000);
+        const busy = await t.call('POST', '/api/v1/goals', { user: alex, body: { title: 'Busy', target_amount: 5 }, key: 'goal-key-busy-0001' });
+        assert.deepStrictEqual([busy.status, busy.json.code, busy.headers.get('retry-after')], [409, 'idempotency.in_progress', '1']);
+        // A claim left by a process that died over a minute ago is taken over.
+        await claim('goal-key-stale-001', { title: 'Stale', target_amount: 5 }, 120_000);
+        const taken = await t.call('POST', '/api/v1/goals', { user: alex, body: { title: 'Stale', target_amount: 5 }, key: 'goal-key-stale-001' });
+        assert.strictEqual(taken.status, 201, taken.text);
+        const replay = await t.call('POST', '/api/v1/goals', { user: alex, body: { title: 'Stale', target_amount: 5 }, key: 'goal-key-stale-001' });
+        assert.deepStrictEqual([replay.headers.get('idempotent-replayed'), replay.json.goal.id], ['true', taken.json.goal.id]);
+        // A refusal is not stored: its claim is released, and a retry of the refused request runs again.
+        const bad = await t.call('POST', '/api/v1/goals', { user: alex, body: { title: '' }, key: 'goal-key-refused-1' });
+        assert.strictEqual(bad.status, 422);
+        await new Promise((ok) => setTimeout(ok, 50));
+        assert.strictEqual(await t.db.value("SELECT count(*) FROM api_idempotency WHERE key LIKE '%goal-key-refused-1'"), 0, 'refusals are not stored');
+        assert.strictEqual((await t.call('POST', '/api/v1/goals', { user: alex, body: { title: '' }, key: 'goal-key-refused-1' })).status, 422);
+        for (const id of [taken.json.goal.id, both.find((r) => r.status === 201).json.goal.id]) await t.call('POST', `/api/v1/goals/${id}/close`, { user: alex });
+    });
+
     await check('receipts: supporters see their own, creators theirs, nobody else', async () => {
         const mine = await t.call('GET', '/api/v1/interactions', { user: viewer });
         assert.ok(mine.json.interactions.length >= 2);
@@ -158,7 +191,7 @@ const { boot, check, done } = require('./helpers/app');
 
     await check('totals: derived from settled interactions, never from a stored balance', async () => {
         const r = await t.call('GET', '/api/v1/profiles/alex/totals', { user: alex });
-        const sum = t.db.prepare("SELECT SUM(amount - reversed_bits) AS n FROM tip_interactions WHERE creator_subject = ? AND test = 0 AND settlement IN ('billing','imported') AND payment_state IN ('settled','reversed')").get(alex.subject).n;
+        const sum = await t.db.value("SELECT SUM(amount - reversed_bits)::bigint FROM tip_interactions WHERE creator_subject = $1 AND NOT test AND settlement IN ('billing','imported') AND payment_state IN ('settled','reversed')", [alex.subject]);
         assert.strictEqual(r.json.totals.settled_via_billing, sum);
         assert.strictEqual(r.json.totals.settled_via_billing, billing.payable.get(alex.subject), 'equals what Billing holds for the creator');
         assert.strictEqual((await t.call('GET', '/api/v1/profiles/alex/totals', { user: viewer })).status, 403);

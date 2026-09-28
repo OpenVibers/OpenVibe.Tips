@@ -14,41 +14,41 @@
  *                                 chat line, overlay alert, goal. Billing sends it only once it is the
  *                                 money authority (while Live is, Live's webhook announces the tip)
  *
- * Exactly once, twice over: the openvibe-sdk inbox claims (consumer, event_id) in the same SQLite
+ * Exactly once, twice over: the openvibe-sdk inbox claims (consumer, event_id) in the same
  * transaction as the change, so a redelivered event does nothing; and the Billing transaction id is
  * UNIQUE on tip_interactions, so the same transaction arriving under another event id (a replay, a
- * republish) still yields one logical interaction.
+ * republish) still yields one logical interaction. That transaction moves money state, so it is
+ * SERIALIZABLE (domain MONEY): two deliveries racing in two processes settle once.
  *
  * The signature (X-OpenVibe-Signature, HMAC-SHA256 of the raw body with TIPS_EVENTS_SECRET) is
  * verified with openvibe-sdk's parseDelivery. Only events whose source is `billing` are applied.
  */
 const express = require('express');
 const { http } = require('openvibe-contracts');
-const { parseDelivery, createInbox } = require('openvibe-sdk/events');
+const { parseDelivery, createPgInbox } = require('openvibe-sdk/events');
 
 const CONSUMER = 'tips-billing';
+const TABLE = 'tips_event_inbox';   // migrations/0001_initial.sql (inboxSchema)
 
 function consumerRouter({ domain, config, log = console }) {
     const router = express.Router();
-    const inbox = createInbox(domain.db, { now: domain.now });
-    inbox.ensureSchema();
+    // The inbox's transaction is the domain's MONEY one (serializable, with after-commit hooks).
+    const inbox = createPgInbox({ tx: (fn) => domain.tx(fn, domain.MONEY), maybe: (...a) => domain.db.maybe(...a) }, { table: TABLE, now: domain.now });
 
     /** Apply one envelope (also used by tests and the replay tool). Returns { duplicate, outcome }. */
-    function apply(event) {
-        return domain.tx(() => {
-            const r = inbox.once(CONSUMER, event.event_id, () => {
-                if (event.source !== 'billing') return 'ignored:source';
-                const payload = event.payload && typeof event.payload === 'object' ? event.payload : {};
-                if (event.event_type === 'billing.transaction.settled') return domain.interactions.onBillingSettled(payload);
-                if (event.event_type === 'billing.transaction.reversed') return domain.interactions.onBillingReversed(payload);
-                if (event.event_type === 'billing.receipt.external') return domain.interactions.onBillingExternal(payload);
-                return 'ignored:type';
-            });
-            return r.duplicate ? { duplicate: true, outcome: null } : { duplicate: false, outcome: r.result };
+    async function apply(event) {
+        const r = await inbox.once(CONSUMER, event.event_id, async (t) => {
+            if (event.source !== 'billing') return 'ignored:source';
+            const payload = event.payload && typeof event.payload === 'object' ? event.payload : {};
+            if (event.event_type === 'billing.transaction.settled') return domain.interactions.onBillingSettled(t, payload);
+            if (event.event_type === 'billing.transaction.reversed') return domain.interactions.onBillingReversed(t, payload);
+            if (event.event_type === 'billing.receipt.external') return domain.interactions.onBillingExternal(t, payload);
+            return 'ignored:type';
         });
+        return r.duplicate ? { duplicate: true, outcome: null } : { duplicate: false, outcome: r.result };
     }
 
-    router.post('/events', express.raw({ type: () => true, limit: '256kb' }), (req, res) => {
+    router.post('/events', express.raw({ type: () => true, limit: '256kb' }), async (req, res) => {
         const secrets = config.events.webhookSecrets;
         if (!secrets.length) return http.sendProblem(res, 503, 'tips.webhook_disabled', { detail: 'TIPS_EVENTS_SECRET is not set', ctx: req.ov });
         const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
@@ -62,7 +62,7 @@ function consumerRouter({ domain, config, log = console }) {
         }
         let out;
         try {
-            out = apply(event);
+            out = await apply(event);
         } catch (e) {
             // Not acknowledged: Events retries it, and the inbox claim rolled back with the change.
             log.error(`[Tips] event ${event.event_id} (${event.event_type}) failed:`, e.message);

@@ -3,8 +3,11 @@ Description=OpenVibe.Tips — creator support: tips, goals, paid messages, TTS a
 # Network signs the tokens Tips verifies (its key is fetched at boot and retried); Billing moves
 # the money; Events carries Billing's settlements in and Tips' events out. Tips starts without any
 # of them: pages and overlays keep working, payments wait.
-After=network.target
-Wants=openvibe-network.service openvibe-billing.service
+# Its own data (ADR-035, OpenVibe.Host's data role): PostgreSQL (migrations at boot on the direct
+# connection, then PgBouncer) is required, the process exits and is restarted until it answers;
+# Valkey is shared state only (without it everything shared is counted per process).
+After=network.target postgresql.service pgbouncer.service valkey-server.service
+Wants=openvibe-network.service openvibe-billing.service postgresql.service pgbouncer.service valkey-server.service
 
 [Service]
 Type=simple
@@ -19,7 +22,9 @@ Environment=PATH=/usr/local/bin:/usr/bin:/bin
 ExecStart=/usr/bin/env node /opt/openvibe.tips/server/index.js
 Restart=always
 RestartSec=5
-# Tips' own database (ADR-007: one database per service); the code tree stays read-only.
+# DATABASE_URL, DATABASE_DIRECT_URL, VALKEY_URL and VALKEY_PREFIX come from the env file
+# (roles/data/add-service.sh tips). The state directory keeps the SQLite file of the release before
+# PostgreSQL: read-only rollback for the 7-day N-1 window, read by scripts/migrate-to-postgres.js.
 StateDirectory=openvibe-tips
 StateDirectoryMode=0700
 Environment=TIPS_DB_PATH=/var/lib/openvibe-tips/tips.db

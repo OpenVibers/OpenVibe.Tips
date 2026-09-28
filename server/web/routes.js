@@ -25,8 +25,10 @@ const crypto = require('crypto');
 const ovServe = require('openvibe-shared/serve');
 const frame = require('openvibe-shared/frame');
 const express = require('express');
-const { TipsError, json: parseJson } = require('../util');
+const { sql } = require('openvibe-sdk/db');
+const { TipsError } = require('../util');
 const { viewerMiddleware } = require('./session');
+const { asyncRouter } = require('./async-router');
 const pages = require('./pages');
 const { esc, asset } = require('./layout');
 const { PAGE_DEFAULTS } = require('../domain/profiles');
@@ -37,7 +39,8 @@ const MOD_FLASH = new Set(['Hidden', 'Shown', 'You are now a moderator']);
 const RECEIPT_FLASH = new Set(['Your data was erased from your tips']);
 
 function createWebRoutes({ domain, config, layout, userAuth }) {
-    const r = express.Router();
+    // Every handler below may be async: its errors reach the app's error handler (the 500 page).
+    const r = asyncRouter(express.Router());
     const { profiles, goals, interactions, overlays, moderation, db } = domain;
     const withViewer = viewerMiddleware(userAuth);
     const form = express.urlencoded({ extended: false, limit: '32kb' });
@@ -64,62 +67,66 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
     const bool = (v) => v === '1' || v === 'on' || v === true;
 
     // ── Home, robots, sitemap ────────────────────────────────
-    r.get('/', withViewer, (req, res) => {
-        const creators = db.prepare(`SELECT handle, display_name, avatar_url FROM creator_tip_profiles WHERE page_enabled = 1 ORDER BY updated_at DESC LIMIT 24`).all();
+    r.get('/', withViewer, async (req, res) => {
+        const creators = await db.many(sql`SELECT handle, display_name, avatar_url FROM creator_tip_profiles WHERE page_enabled ORDER BY updated_at DESC LIMIT 24`);
         html(res, pageFor(req, { active: 'home', canonicalPath: '/', body: pages.home({ creators }) }));
     });
     // What shipped on OpenVibe.Tips: the shared update log every OpenVibe site has.
     r.get('/updates', withViewer, (req, res) => html(res, pageFor(req, { canonicalPath: '/updates', title: 'What shipped on OpenVibe.Tips', body: frame.updatesBody({ service: 'tips', siteName: 'OpenVibe.Tips' }) + `<script src="${ovServe.url('shipped.js')}" defer></script>` })));
     r.get('/robots.txt', (req, res) => res.type('text/plain').set('Cache-Control', 'public, max-age=3600').send(
         `User-agent: *\nAllow: /\nDisallow: /dashboard\nDisallow: /receipts\nDisallow: /overlay/\nDisallow: /moderate/\nDisallow: /auth/\nDisallow: /api/\nDisallow: /internal/\nSitemap: ${config.baseUrl}/sitemap.xml\n`));
-    r.get('/sitemap.xml', (req, res) => {
-        const rows = db.prepare('SELECT handle, updated_at FROM creator_tip_profiles WHERE page_enabled = 1 ORDER BY handle').all();
+    r.get('/sitemap.xml', async (req, res) => {
+        const rows = await db.many(sql`SELECT handle, updated_at FROM creator_tip_profiles WHERE page_enabled ORDER BY handle`);
         const urls = [`<url><loc>${esc(config.baseUrl)}/</loc></url>`, ...rows.map((p) => `<url><loc>${esc(`${config.baseUrl}/${p.handle}`)}</loc><lastmod>${esc(p.updated_at.slice(0, 10))}</lastmod></url>`)];
         res.type('application/xml').set('Cache-Control', 'public, max-age=900').send(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.join('')}</urlset>\n`);
     });
 
     // ── Receipts ─────────────────────────────────────────────
-    const decorate = (i) => {
-        const p = profiles.bySubject(i.creator_subject);
-        return { ...interactions.present(i, { viewer: 'supporter' }), creator_handle: p && p.handle, creator_name: p && p.display_name };
-    };
-    r.get('/receipts', withViewer, (req, res) => {
+    /** The supporter's view of each receipt, with its creator's handle and name (one query for all creators). */
+    async function decorate(rows) {
+        const [views, byCreator] = await Promise.all([
+            interactions.presentMany(db, rows, { viewer: 'supporter' }),
+            profiles.bySubjects(db, rows.map((i) => i.creator_subject)),
+        ]);
+        return views.map((v, k) => { const p = byCreator.get(rows[k].creator_subject); return { ...v, creator_handle: p && p.handle, creator_name: p && p.display_name }; });
+    }
+    r.get('/receipts', withViewer, async (req, res) => {
         if (!req.viewer) return res.redirect(`/auth/login?next=${encodeURIComponent('/receipts')}`);
-        const out = interactions.list({ supporter: req.viewer.subject, cursor: req.query.cursor, limit: 50 });
+        const out = await interactions.list(db, { supporter: req.viewer.subject, cursor: req.query.cursor, limit: 50 });
         const flash = RECEIPT_FLASH.has(String(req.query.done || '')) ? String(req.query.done) : null;
-        html(res, pageFor(req, { title: 'Receipts', active: 'receipts', robots: 'noindex,nofollow', canonicalPath: '/receipts', body: pages.receiptsPage({ rows: out.rows.map(decorate), next: out.next_cursor, flash }) }));
+        return html(res, pageFor(req, { title: 'Receipts', active: 'receipts', robots: 'noindex,nofollow', canonicalPath: '/receipts', body: pages.receiptsPage({ rows: await decorate(out.rows), next: out.next_cursor, flash }) }));
     });
     // The supporter's own data: a download, and erasure (privacy.js, interactions.erase()).
-    r.get('/receipts/export', withViewer, (req, res) => {
+    r.get('/receipts/export', withViewer, async (req, res) => {
         if (!req.viewer) return res.redirect(`/auth/login?next=${encodeURIComponent('/receipts')}`);
-        const day = new Date(domain.now()).toISOString().slice(0, 10);
-        res.status(200).set({ 'Cache-Control': 'no-store', 'Content-Disposition': `attachment; filename="openvibe-tips-${day}.json"`, 'X-Robots-Tag': 'noindex, nofollow' })
-            .type('application/json').send(`${JSON.stringify(interactions.exportFor(req.viewer.subject), null, 2)}\n`);
+        const today = new Date(domain.now()).toISOString().slice(0, 10);
+        return res.status(200).set({ 'Cache-Control': 'no-store', 'Content-Disposition': `attachment; filename="openvibe-tips-${today}.json"`, 'X-Robots-Tag': 'noindex, nofollow' })
+            .type('application/json').send(`${JSON.stringify(await interactions.exportFor(req.viewer.subject), null, 2)}\n`);
     });
-    function renderErase(req, res, status = 200) {
-        const rows = db.prepare("SELECT payment_state FROM tip_interactions WHERE supporter_subject = ?").all(req.viewer.subject);
+    async function renderErase(req, res, status = 200) {
+        const c = await db.one(sql`SELECT count(*) AS n, count(*) FILTER (WHERE payment_state = 'pending') AS pending FROM tip_interactions WHERE supporter_subject = ${req.viewer.subject}`);
         html(res, pageFor(req, {
             title: 'Erase your data', active: 'receipts', robots: 'noindex,nofollow', canonicalPath: '/receipts/erase',
-            body: pages.erasePage({ csrf: csrfFor(req.viewer.subject), idem: idem(), count: rows.length, pending: rows.filter((x) => x.payment_state === 'pending').length }),
+            body: pages.erasePage({ csrf: csrfFor(req.viewer.subject), idem: idem(), count: c.n, pending: c.pending }),
         }), status);
     }
-    r.get('/receipts/erase', withViewer, (req, res) => {
+    r.get('/receipts/erase', withViewer, async (req, res) => {
         if (!req.viewer) return res.redirect(`/auth/login?next=${encodeURIComponent('/receipts/erase')}`);
-        renderErase(req, res);
+        return renderErase(req, res);
     });
-    r.post('/receipts/erase', withViewer, form, (req, res) => {
+    r.post('/receipts/erase', withViewer, form, async (req, res) => {
         if (!req.viewer) return res.redirect(303, `/auth/login?next=${encodeURIComponent('/receipts/erase')}`);
         if (!csrfOk(req) || !bool(req.body.confirm)) return renderErase(req, res, 403);
-        interactions.erase(req.viewer.subject);
+        await interactions.erase(req.viewer.subject);
         return res.redirect(303, `/receipts?done=${encodeURIComponent('Your data was erased from your tips')}`);
     });
-    r.get('/receipts/:id', withViewer, (req, res) => {
+    r.get('/receipts/:id', withViewer, async (req, res) => {
         if (!req.viewer) return res.redirect(`/auth/login?next=${encodeURIComponent(req.originalUrl)}`);
-        const i = interactions.get(req.params.id);
+        const i = await interactions.get(db, req.params.id);
         const as = i && (i.supporter_subject === req.viewer.subject ? 'supporter' : i.creator_subject === req.viewer.subject ? 'creator' : null);
         if (!i || !as) return notFound(req, res);
-        const view = interactions.present(i, { viewer: as === 'creator' ? 'owner' : 'supporter' });
-        html(res, pageFor(req, { title: 'Receipt', active: 'receipts', robots: 'noindex,nofollow', canonicalPath: `/receipts/${i.id}`, body: pages.receiptPage({ i: view, profile: profiles.bySubject(i.creator_subject), as, cancelled: req.query.cancelled === '1' }) }));
+        const [view, profile] = await Promise.all([interactions.present(db, i, { viewer: as === 'creator' ? 'owner' : 'supporter' }), profiles.bySubject(db, i.creator_subject)]);
+        return html(res, pageFor(req, { title: 'Receipt', active: 'receipts', robots: 'noindex,nofollow', canonicalPath: `/receipts/${i.id}`, body: pages.receiptPage({ i: view, profile, as, cancelled: req.query.cancelled === '1' }) }));
     });
 
     // ── Dashboard ────────────────────────────────────────────
@@ -128,42 +135,45 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
         const claims = req.viewerClaims || {};
         return profiles.ensure(v.subject, { username: v.username, displayName: v.name, avatarUrl: claims.avatar_url });
     }
-    function ensureAlertsConfig(subject) {
-        if (!overlays.listConfigs(subject).some((c) => c.kind === 'alerts')) overlays.createConfig(subject, { kind: 'alerts', name: 'Alerts' });
-    }
-    function renderDashboard(req, res, { flash, error, status = 200 } = {}) {
-        const p = ensureProfile(req);
-        ensureAlertsConfig(p.creator_subject);
-        const recent = interactions.list({ creator: p.creator_subject, limit: 20 }).rows.map((i) => interactions.present(i, { viewer: 'owner' }));
+    async function renderDashboard(req, res, { flash, error, status = 200 } = {}) {
+        const p = await ensureProfile(req);
+        let configs = await overlays.listConfigs(db, p.creator_subject);
+        if (!configs.some((c) => c.kind === 'alerts')) {
+            await overlays.createConfig(p.creator_subject, { kind: 'alerts', name: 'Alerts' });
+            configs = await overlays.listConfigs(db, p.creator_subject);
+        }
+        const s = p.creator_subject;
+        const [recentRows, goalRows, tokens, totals, deliveries, connected, held, moderators, invites, log, moderating] = await Promise.all([
+            interactions.list(db, { creator: s, limit: 20 }).then((out) => interactions.presentMany(db, out.rows, { viewer: 'owner' })),
+            goals.list(db, s).then((list) => goals.presentMany(db, list)),
+            overlays.listTokens(db, s), interactions.totals(db, s), overlays.recentDeliveries(db, s, 20), overlays.connected(s),
+            moderation.heldCount(db, s), moderation.listModerators(db, s), moderation.openInvites(db, s), moderation.log(db, s, 20), moderation.moderatedBy(db, req.viewer.subject),
+        ]);
         html(res, pageFor(req, {
             title: 'Dashboard', active: 'dashboard', robots: 'noindex,nofollow', canonicalPath: '/dashboard',
             body: pages.dashboard({
-                profile: p, goals: goals.list(p.creator_subject).map((g) => goals.present(g)), tokens: overlays.listTokens(p.creator_subject).map(overlays.presentToken),
-                configs: overlays.listConfigs(p.creator_subject).map(overlays.presentConfig), totals: interactions.totals(p.creator_subject), recent,
-                deliveries: overlays.recentDeliveries(p.creator_subject, 20), csrf: csrfFor(req.viewer.subject), idem: idem(), flash, error,
-                connected: overlays.connected(p.creator_subject), chatAdapter: config.chat.adapter,
-                mod: {
-                    held: db.prepare("SELECT COUNT(*) AS n FROM tip_interactions WHERE creator_subject = ? AND moderation = 'held' AND payment_state = 'settled'").get(p.creator_subject).n,
-                    moderators: moderation.listModerators(p.creator_subject).map(moderation.presentModerator), invites: moderation.openInvites(p.creator_subject),
-                    log: moderation.log(p.creator_subject, 20), moderating: moderation.moderatedBy(req.viewer.subject),
-                },
+                profile: p, goals: goalRows, tokens: tokens.map(overlays.presentToken),
+                configs: configs.map(overlays.presentConfig), totals, recent: recentRows,
+                deliveries, csrf: csrfFor(req.viewer.subject), idem: idem(), flash, error,
+                connected, chatAdapter: config.chat.adapter,
+                mod: { held, moderators: moderators.map(moderation.presentModerator), invites, log, moderating },
             }),
         }), status);
     }
-    r.get('/dashboard', withViewer, (req, res) => {
+    r.get('/dashboard', withViewer, async (req, res) => {
         if (!req.viewer) return res.redirect(`/auth/login?next=${encodeURIComponent('/dashboard')}`);
         // Only our own confirmations are shown: a crafted ?done= link cannot put words on the page.
-        renderDashboard(req, res, { flash: FLASH.has(String(req.query.done || '')) ? String(req.query.done) : null });
+        return renderDashboard(req, res, { flash: FLASH.has(String(req.query.done || '')) ? String(req.query.done) : null });
     });
 
     /** A dashboard form action: sign-in + anti-forgery, errors re-render the dashboard. */
     function action(path, fn) {
-        r.post(path, withViewer, form, (req, res) => {
+        r.post(path, withViewer, form, async (req, res) => {
             if (!req.viewer) return res.redirect(`/auth/login?next=${encodeURIComponent('/dashboard')}`);
             if (!csrfOk(req)) return renderDashboard(req, res, { error: 'That form expired. Please try again.', status: 403 });
             try {
-                const p = ensureProfile(req);
-                const out = fn(req, p);
+                const p = await ensureProfile(req);
+                const out = await fn(req, p);
                 if (out && out.render) return out.render(res);
                 return res.redirect(303, `/dashboard?done=${encodeURIComponent((out && out.done) || 'Saved')}`);
             } catch (e) {
@@ -172,9 +182,9 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
             }
         });
     }
-    action('/dashboard/profile', (req, p) => {
+    action('/dashboard/profile', async (req, p) => {
         const b = req.body;
-        profiles.update(p.creator_subject, {
+        await profiles.update(p.creator_subject, {
             page_enabled: bool(b.page_enabled), accepting: bool(b.accepting), tts_enabled: bool(b.tts_enabled), media_requests_enabled: bool(b.media_requests_enabled),
             headline: b.headline, min_amount: b.min_amount, paid_message_min: b.paid_message_min, tts_min_amount: b.tts_min_amount, tts_max_chars: b.tts_max_chars,
             tts_voice: b.tts_voice, media_request_min: b.media_request_min, media_max_seconds: b.media_max_seconds,
@@ -182,46 +192,46 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
         }, { expectedRevision: b.revision });
         return { done: 'Page settings saved' };
     });
-    action('/dashboard/goals', (req, p) => { goals.create(p.creator_subject, req.body); return { done: 'Goal added' }; });
-    const ownGoal = (req, p) => {
-        const g = goals.get(req.params.id);
+    action('/dashboard/goals', async (req, p) => { await goals.create(p.creator_subject, req.body); return { done: 'Goal added' }; });
+    const ownGoal = async (req, p) => {
+        const g = await goals.get(db, req.params.id);
         if (!g || g.creator_subject !== p.creator_subject) throw new TipsError(404, 'tips.goal_not_found', 'no such goal');
         return g;
     };
-    action('/dashboard/goals/:id', (req, p) => { goals.update(ownGoal(req, p), { title: req.body.title, target_amount: req.body.target_amount, revision: req.body.revision }); return { done: 'Goal updated' }; });
-    action('/dashboard/goals/:id/close', (req, p) => { goals.close(ownGoal(req, p)); return { done: 'Goal closed' }; });
-    action('/dashboard/overlay-tokens', (req, p) => {
+    action('/dashboard/goals/:id', async (req, p) => { await goals.update(await ownGoal(req, p), { title: req.body.title, target_amount: req.body.target_amount, revision: req.body.revision }); return { done: 'Goal updated' }; });
+    action('/dashboard/goals/:id/close', async (req, p) => { await goals.close(await ownGoal(req, p)); return { done: 'Goal closed' }; });
+    action('/dashboard/overlay-tokens', async (req, p) => {
         const scopes = [bool(req.body.scope_alerts) && 'alerts', bool(req.body.scope_goals) && 'goals'].filter(Boolean);
-        const alertCfg = overlays.listConfigs(p.creator_subject).find((c) => c.kind === 'alerts');
-        const out = overlays.createToken(p.creator_subject, { scopes, label: req.body.label, configId: alertCfg ? alertCfg.id : null, createdBy: req.viewer.subject });
+        const alertCfg = (await overlays.listConfigs(db, p.creator_subject)).find((c) => c.kind === 'alerts');
+        const out = await overlays.createToken(p.creator_subject, { scopes, label: req.body.label, configId: alertCfg ? alertCfg.id : null, createdBy: req.viewer.subject });
         return { render: (res) => html(res, pageFor(req, { title: 'Overlay link', active: 'dashboard', robots: 'noindex,nofollow', canonicalPath: '/dashboard', body: pages.tokenCreated({ out }) }), 201, { 'Cache-Control': 'no-store' }) };
     });
-    action('/dashboard/overlay-tokens/:id/revoke', (req, p) => {
-        const t = overlays.getToken(req.params.id);
+    action('/dashboard/overlay-tokens/:id/revoke', async (req, p) => {
+        const t = await overlays.getToken(db, req.params.id);
         if (!t || t.creator_subject !== p.creator_subject) throw new TipsError(404, 'tips.overlay_token_not_found', 'no such overlay token');
-        overlays.revokeToken(t);
+        await overlays.revokeToken(t);
         return { done: 'Overlay link revoked' };
     });
-    action('/dashboard/overlay-configs/:id', (req, p) => {
-        const c = overlays.getConfig(req.params.id);
+    action('/dashboard/overlay-configs/:id', async (req, p) => {
+        const c = await overlays.getConfig(db, req.params.id);
         if (!c || c.creator_subject !== p.creator_subject) throw new TipsError(404, 'tips.overlay_config_not_found', 'no such overlay config');
         const b = req.body;
-        overlays.updateConfig(c, { ...b, show_message: bool(b.show_message), speak_message: bool(b.speak_message), show_amount: bool(b.show_amount) });
+        await overlays.updateConfig(c, { ...b, show_message: bool(b.show_message), speak_message: bool(b.speak_message), show_amount: bool(b.show_amount) });
         return { done: 'Alert settings saved' };
     });
-    action('/dashboard/filter', (req, p) => {
-        profiles.update(p.creator_subject, { filter: { words: req.body.words || '', action: req.body.action, links: bool(req.body.links) } });
+    action('/dashboard/filter', async (req, p) => {
+        await profiles.update(p.creator_subject, { filter: { words: req.body.words || '', action: req.body.action, links: bool(req.body.links) } });
         return { done: 'Filter saved' };
     });
-    action('/dashboard/moderators/:subject/remove', (req, p) => { moderation.removeModerator(p.creator_subject, req.params.subject); return { done: 'Moderator removed' }; });
-    action('/dashboard/moderator-invites', (req, p) => {
-        const out = moderation.createInvite(p.creator_subject, { createdBy: req.viewer.subject });
+    action('/dashboard/moderators/:subject/remove', async (req, p) => { await moderation.removeModerator(p.creator_subject, req.params.subject); return { done: 'Moderator removed' }; });
+    action('/dashboard/moderator-invites', async (req, p) => {
+        const out = await moderation.createInvite(p.creator_subject, { createdBy: req.viewer.subject });
         return { render: (res) => html(res, pageFor(req, { title: 'Moderator invitation', active: 'dashboard', robots: 'noindex,nofollow', canonicalPath: '/dashboard', body: pages.inviteCreated({ out }) }), 201, { 'Cache-Control': 'no-store' }) };
     });
-    action('/dashboard/moderator-invites/:id/revoke', (req, p) => { moderation.revokeInvite(p.creator_subject, req.params.id); return { done: 'Invitation revoked' }; });
-    action('/dashboard/simulate', (req, p) => {
+    action('/dashboard/moderator-invites/:id/revoke', async (req, p) => { await moderation.revokeInvite(p.creator_subject, req.params.id); return { done: 'Invitation revoked' }; });
+    action('/dashboard/simulate', async (req, p) => {
         const b = req.body;
-        interactions.simulate(p, {
+        await interactions.simulate(p, {
             kind: b.kind, amount: b.amount, message: b.message, supporter_name: b.supporter_name,
             tts: b.kind === 'tts' ? { text: b.message } : undefined, media: b.kind === 'media_request' ? { url: b.media_url } : undefined,
         }, { by: req.viewer.subject });
@@ -230,13 +240,13 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
 
     // ── Overlays (token in the path; no cookies involved) ────
     const overlayHeaders = { 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Robots-Tag': 'noindex, nofollow' };
-    function tokenOr404(req, res) {
-        const t = overlays.authenticate(req.params.token);
+    async function tokenOr404(req, res) {
+        const t = await overlays.authenticate(db, req.params.token);
         if (!t) { res.status(404).set(overlayHeaders).type('text/plain').send('This overlay link is not valid (it may have been revoked).'); return null; }
         return t;
     }
-    r.get('/overlay/:token', (req, res) => {
-        const t = tokenOr404(req, res);
+    r.get('/overlay/:token', async (req, res) => {
+        const t = await tokenOr404(req, res);
         if (!t) return;
         res.status(200).set({ ...overlayHeaders, 'Content-Type': 'text/html; charset=utf-8' }).send(`<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer">
@@ -246,59 +256,59 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
 <noscript><p class="nojs">This overlay needs JavaScript (OBS Browser Sources have it on).</p></noscript>
 <script src="${asset('js/overlay.js')}" defer></script></body></html>`);
     });
-    r.get('/overlay/:token/events', (req, res) => {
-        const t = tokenOr404(req, res);
+    r.get('/overlay/:token/events', async (req, res) => {
+        const t = await tokenOr404(req, res);
         if (!t) return;
-        if (overlays.streamsFor(t) >= config.overlays.maxStreamsPerToken) {
+        // A bounded number of open streams per token, counted across every process (overlay-hub.js).
+        const slot = await overlays.reserveStream(t);
+        if (!slot) {
             res.status(429).set({ ...overlayHeaders, 'Retry-After': '30' }).type('text/plain').send('Too many open streams for this overlay link.');
             return;
         }
+        let overlayConfig = null;
+        try { overlayConfig = t.config_id ? await overlays.getConfig(db, t.config_id) : null; } catch (e) { overlays.releaseStream(slot); throw e; }
         res.status(200).set({ ...overlayHeaders, 'Content-Type': 'text/event-stream; charset=utf-8', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
         res.flushHeaders();
         res.write('retry: 3000\n\n');
-        const overlayConfig = t.config_id ? overlays.getConfig(t.config_id) : null;
         const lastEventId = req.get('last-event-id') != null ? req.get('last-event-id') : req.query.last_event_id;
-        overlays.attach(t, res, { lastEventId: lastEventId != null && lastEventId !== '' ? lastEventId : undefined, config: overlayConfig });
+        overlays.attach(t, res, slot, { lastEventId: lastEventId != null && lastEventId !== '' ? lastEventId : undefined, config: overlayConfig });
     });
-    r.get('/overlay/:token/state', (req, res) => {
-        const t = tokenOr404(req, res);
+    r.get('/overlay/:token/state', async (req, res) => {
+        const t = await tokenOr404(req, res);
         if (!t) return;
         const out = { creator: { type: 'user', id: t.creator_subject }, scopes: t.scopes };
-        if (t.scopes.includes('goals')) out.goals = goals.list(t.creator_subject, { status: 'active' }).map((g) => goals.present(g));
-        if (t.scopes.includes('alerts')) {
-            out.alerts = db.prepare("SELECT seq, payload, test, created_at FROM overlay_deliveries WHERE creator_subject = ? AND kind = 'alert' AND hidden = 0 ORDER BY seq DESC LIMIT 20")
-                .all(t.creator_subject).map((d) => ({ seq: d.seq, ...parseJson(d.payload, {}), test: !!d.test, created_at: d.created_at }));
-        }
+        if (t.scopes.includes('goals')) out.goals = await goals.presentMany(db, await goals.list(db, t.creator_subject, { status: 'active' }));
+        if (t.scopes.includes('alerts')) out.alerts = await overlays.recentAlerts(db, t.creator_subject);
         res.set(overlayHeaders).json(out);
     });
 
     // ── Moderation (the creator and their moderators) ─────────
     // Invitation links carry a secret in the path, like overlay links: no-store, no referrer, noindex.
     const inviteHeaders = { 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Robots-Tag': 'noindex, nofollow' };
-    function inviteOr404(req, res) {
-        const inv = moderation.findInvite(req.params.token);
-        const profile = inv && profiles.bySubject(inv.creator_subject);
+    async function inviteOr404(req, res) {
+        const inv = await moderation.findInvite(db, req.params.token);
+        const profile = inv && await profiles.bySubject(db, inv.creator_subject);
         if (!inv || !profile) {
             html(res, pageFor(req, { title: 'Invitation', robots: 'noindex,nofollow', body: pages.errorPage({ status: 404, title: 'This invitation is not valid', message: 'It may have been used, revoked or expired. Ask the creator for a new one.' }) }), 404, inviteHeaders);
             return null;
         }
         return { inv, profile };
     }
-    r.get('/moderate/invite/:token', withViewer, (req, res) => {
+    r.get('/moderate/invite/:token', withViewer, async (req, res) => {
         if (!req.viewer) return res.set(inviteHeaders).redirect(`/auth/login?next=${encodeURIComponent(req.originalUrl)}`);
-        const found = inviteOr404(req, res);
+        const found = await inviteOr404(req, res);
         if (!found) return undefined;
         return html(res, pageFor(req, {
             title: `Moderate ${found.profile.display_name}`, robots: 'noindex,nofollow', canonicalPath: '/',
             body: pages.invitePage({ profile: found.profile, csrf: csrfFor(req.viewer.subject), idem: idem(), secret: req.params.token, isSelf: found.profile.creator_subject === req.viewer.subject }),
         }), 200, inviteHeaders);
     });
-    r.post('/moderate/invite/:token', withViewer, form, (req, res) => {
+    r.post('/moderate/invite/:token', withViewer, form, async (req, res) => {
         if (!req.viewer) return res.set(inviteHeaders).redirect(303, '/auth/login');
         if (!csrfOk(req)) return html(res, pageFor(req, { title: 'Invitation', robots: 'noindex,nofollow', body: pages.errorPage({ status: 403, title: 'That form expired', message: 'Open the invitation link again.' }) }), 403, inviteHeaders);
         try {
-            const out = moderation.acceptInvite(req.params.token, { subject: req.viewer.subject, name: req.viewer.name || req.viewer.username });
-            const profile = profiles.bySubject(out.creator);
+            const out = await moderation.acceptInvite(req.params.token, { subject: req.viewer.subject, name: req.viewer.name || req.viewer.username });
+            const profile = await profiles.bySubject(db, out.creator);
             return res.set(inviteHeaders).redirect(303, `/moderate/${encodeURIComponent(profile.handle)}?done=${encodeURIComponent('You are now a moderator')}`);
         } catch (e) {
             if (e instanceof TipsError) return html(res, pageFor(req, { title: 'Invitation', robots: 'noindex,nofollow', body: pages.errorPage({ status: e.status, title: 'This invitation is not valid', message: e.detail || e.message }) }), e.status, inviteHeaders);
@@ -307,36 +317,35 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
     });
 
     /** The creator or one of their moderators, for /moderate/:handle; else null (the page is a 404). */
-    function modAccess(req) {
-        const p = profiles.byHandle(req.params.handle);
+    async function modAccess(req) {
+        const p = await profiles.byHandle(db, req.params.handle);
         if (!p || !req.viewer) return { p };
-        const actor = moderation.actorFor(req.viewer, p.creator_subject, false);
-        return { p, actor };
+        return { p, actor: await moderation.actorFor(db, req.viewer, p.creator_subject, false) };
     }
-    function renderModerate(req, res, p, { error, status = 200 } = {}) {
+    async function renderModerate(req, res, p, { error, status = 200 } = {}) {
         const state = ['held', 'hidden', 'visible', 'all'].includes(req.query.state) ? req.query.state : 'all';
-        const out = moderation.queue(p.creator_subject, { state, cursor: req.query.cursor, limit: 50 });
+        const out = await moderation.queue(db, p.creator_subject, { state, cursor: req.query.cursor, limit: 50 });
         const flash = MOD_FLASH.has(String(req.query.done || '')) ? String(req.query.done) : null;
         html(res, pageFor(req, {
             title: `Paid messages — ${p.display_name}`, robots: 'noindex,nofollow', canonicalPath: `/moderate/${p.handle}`,
             body: pages.moderatePage({ profile: p, rows: out.rows, state, next: out.next_cursor, csrf: csrfFor(req.viewer.subject), idem: idem(), flash, error, isCreator: req.viewer.subject === p.creator_subject }),
         }), status);
     }
-    r.get('/moderate/:handle', withViewer, (req, res) => {
+    r.get('/moderate/:handle', withViewer, async (req, res) => {
         if (!req.viewer) return res.redirect(`/auth/login?next=${encodeURIComponent(req.originalUrl)}`);
-        const { p, actor } = modAccess(req);
+        const { p, actor } = await modAccess(req);
         if (!p || !actor) return notFound(req, res);
         return renderModerate(req, res, p);
     });
-    r.post('/moderate/:handle/:id/:act(hide|restore)', withViewer, form, (req, res) => {
+    r.post('/moderate/:handle/:id/:act(hide|restore)', withViewer, form, async (req, res) => {
         if (!req.viewer) return res.redirect(303, `/auth/login?next=${encodeURIComponent(`/moderate/${req.params.handle}`)}`);
-        const { p, actor } = modAccess(req);
+        const { p, actor } = await modAccess(req);
         if (!p || !actor) return notFound(req, res);
         if (!csrfOk(req)) return renderModerate(req, res, p, { error: 'That form expired. Please try again.', status: 403 });
-        const i = interactions.get(req.params.id);
+        const i = await interactions.get(db, req.params.id);
         if (!i || i.creator_subject !== p.creator_subject) return notFound(req, res);
         try {
-            moderation[req.params.act](i, { ...actor, reason: req.body.reason });
+            await moderation[req.params.act](i, { ...actor, reason: req.body.reason });
         } catch (e) {
             if (e instanceof TipsError) return renderModerate(req, res, p, { error: e.detail || e.message, status: 400 });
             throw e;
@@ -346,13 +355,13 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
 
     // ── Creator pages (last: /:handle catches everything else) ──
     const providers = config.billing.providers;
-    function creatorView(req, res, { values, error, status = 200 } = {}) {
-        const p = profiles.byHandle(req.params.handle);
+    async function creatorView(req, res, { values, error, status = 200 } = {}) {
+        const p = await profiles.byHandle(db, req.params.handle);
         const owner = !!(p && req.viewer && req.viewer.subject === p.creator_subject);
         if (!p || (!p.page_enabled && !owner)) return notFound(req, res);
         if (p.handle !== String(req.params.handle)) return res.redirect(301, `/${p.handle}`);   // @name, Name → the canonical path
         // The page shows what the public sees, for the creator too (a preview); the dashboard has the rest.
-        const list = goals.list(p.creator_subject).map((g) => goals.publicGoal(g, p.page));
+        const list = await goals.publicGoals(db, await goals.list(db, p.creator_subject), p);
         const csrf = req.viewer ? csrfFor(req.viewer.subject) : '';
         const jsonLd = p.page_enabled ? [{ '@context': 'https://schema.org', '@type': 'ProfilePage', name: `${p.display_name} on ${'OpenVibe.Tips'}`, url: `${config.baseUrl}/${p.handle}`, mainEntity: { '@type': 'Person', name: p.display_name, alternateName: p.handle, image: p.avatar_url || undefined } }] : [];
         return html(res, pageFor(req, {
@@ -363,33 +372,34 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
         }), status, p.page_enabled ? {} : { 'X-Robots-Tag': 'noindex, nofollow' });
     }
     r.get('/:handle', withViewer, (req, res, next) => (profiles.normalizeHandle(req.params.handle) ? creatorView(req, res) : next()));
-    r.get('/:handle/goals', withViewer, (req, res, next) => {
-        const p = profiles.byHandle(req.params.handle);
+    r.get('/:handle/goals', withViewer, async (req, res, next) => {
+        const p = await profiles.byHandle(db, req.params.handle);
         if (!p) return next();
         const owner = req.viewer && req.viewer.subject === p.creator_subject;
         if (!p.page_enabled && !owner) return notFound(req, res);
-        html(res, pageFor(req, {
+        return html(res, pageFor(req, {
             title: `${p.display_name} — goals`, canonicalPath: `/${p.handle}/goals`, robots: p.page_enabled ? 'index,follow' : 'noindex,nofollow',
-            body: pages.goalsPage({ profile: p, goals: goals.list(p.creator_subject).map((g) => goals.publicGoal(g, p.page)) }),
+            body: pages.goalsPage({ profile: p, goals: await goals.publicGoals(db, await goals.list(db, p.creator_subject), p) }),
         }));
     });
-    r.get('/:handle/supporters', withViewer, (req, res, next) => {
-        const p = profiles.byHandle(req.params.handle);
+    r.get('/:handle/supporters', withViewer, async (req, res, next) => {
+        const p = await profiles.byHandle(db, req.params.handle);
         if (!p) return next();
         const owner = req.viewer && req.viewer.subject === p.creator_subject;
         // Off unless the creator shows it; the creator gets a preview while it is off.
         if ((!p.page_enabled || !p.page.supporters_page) && !owner) return notFound(req, res);
-        const leaderboard = interactions.leaderboard(p.creator_subject).map((row) => (p.page.supporters_amounts ? row : { ...row, total: null }));
-        const recent = p.page.supporters_messages ? interactions.recentPublic(p.creator_subject).map((v) => (p.page.supporters_amounts ? v : { ...v, amount: null })) : null;
+        const [top, recentRows] = await Promise.all([interactions.leaderboard(db, p), p.page.supporters_messages ? interactions.recentPublic(db, p) : null]);
+        const leaderboard = top.map((row) => (p.page.supporters_amounts ? row : { ...row, total: null }));
+        const recent = recentRows ? recentRows.map((v) => (p.page.supporters_amounts ? v : { ...v, amount: null })) : null;
         const indexable = p.page_enabled && p.page.supporters_page;
-        html(res, pageFor(req, {
+        return html(res, pageFor(req, {
             title: `${p.display_name} — supporters`, canonicalPath: `/${p.handle}/supporters`, robots: indexable ? 'index,follow' : 'noindex,nofollow',
             body: pages.supportersPage({ profile: p, leaderboard, recent }),
         }), 200, indexable ? {} : { 'X-Robots-Tag': 'noindex, nofollow' });
     });
 
     r.post('/:handle/tip', withViewer, form, async (req, res, next) => {
-        const p = profiles.byHandle(req.params.handle);
+        const p = await profiles.byHandle(db, req.params.handle);
         if (!p) return next();
         if (!req.viewer) return res.redirect(303, `/auth/login?next=${encodeURIComponent(`/${p.handle}`)}`);
         const b = req.body || {};
@@ -409,7 +419,7 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
                 privacy: { anonymous: values.anonymous, hide_amount: values.hide_amount, private_message: values.private_message },
             };
             const funding = b.pay_with === 'checkout' ? 'checkout' : 'credit';
-            const { interaction, replay } = interactions.request(p, input, { supporter: req.viewer.subject, supporterName: b.supporter_name || req.viewer.name, funding, idempotencyKey: key });
+            const { interaction, replay } = await interactions.request(p, input, { supporter: req.viewer.subject, supporterName: b.supporter_name || req.viewer.name, funding, idempotencyKey: key });
             let i = interaction;
             if (!replay) {
                 if (funding === 'credit') {

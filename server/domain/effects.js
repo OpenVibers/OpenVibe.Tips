@@ -14,9 +14,21 @@
  * is not sent, and the creator's word filter has starred blocked words out of the line and dropped
  * them from the TTS text. `privacy` tells the receiving product what was withheld. An effect whose
  * interaction a moderator hid (or whose effect was cancelled meanwhile) is never delivered.
+ *
+ * Writes to an effect and what it delivers (paid message, media request, the interaction's delivery
+ * state) run SERIALIZABLE with the interaction row locked first, as the money paths do.
+ *
+ * Every process runs the worker; each batch of due effects is claimed with a lease (next_attempt_at
+ * moved past the batch's worst case, FOR UPDATE SKIP LOCKED), so no two processes deliver one effect
+ * at once, and a process that dies mid-batch leaves its effects to the others when the lease ends.
  */
-const { iso, json } = require('../util');
-const { privacyOf, isAnonymous } = require('./privacy');
+const { sql } = require('openvibe-sdk/db');
+const { iso } = require('../util');
+const { privacyOf, isAnonymous, publicView } = require('./privacy');
+
+// A delivery takes up to 10 s (twice with a token refresh): 20 of them finish well inside the lease.
+const BATCH = 20;
+const LEASE_MS = 5 * 60_000;
 
 function createEffects(ctx) {
     const { db, config } = ctx;
@@ -24,8 +36,8 @@ function createEffects(ctx) {
     let kickTimer = null;
 
     function jobFor(effect, i, profile) {
-        const req = json(i.request, {});
-        const pv = ctx.view(i);
+        const req = i.request || {};
+        const pv = publicView(i, { filter: profile ? profile.filter : null });
         const name = pv.supporter_name;
         const amount = pv.amount != null ? `${pv.amount.toLocaleString('en-US')} Vibes` : null;
         const msg = pv.message ? `: ${pv.message}` : '';
@@ -39,7 +51,7 @@ function createEffects(ctx) {
             privacy: privacyOf(i),
             // A tip on the creator's own PowerChat reads as Live's webhook wrote it: "… (PowerChat)".
             text: `${name} ${amount ? `tipped ${amount}` : 'sent a tip'}${msg}${i.settlement === 'external' && i.provider === 'powerchat' ? ' (PowerChat)' : ''}`,
-            target: json(i.target, null),
+            target: i.target || null,
         };
         if (effect.effect === 'paid_message') job.highlight_seconds = req.highlight_seconds || 0;
         if (effect.effect === 'tts') job.tts = pv.tts;
@@ -48,78 +60,92 @@ function createEffects(ctx) {
     }
 
     function markDone(effect, result) {
-        ctx.tx(() => {
+        return ctx.tx(async (t) => {
+            await ctx.interactions.lock(t, effect.interaction_id);
             const at = iso(ctx.now());
-            const r = db.prepare("UPDATE interaction_effects SET state = 'delivered', attempts = attempts + 1, last_error = NULL, result = ?, updated_at = ? WHERE id = ? AND state = 'queued'")
-                .run(JSON.stringify(result || null), at, effect.id);
-            if (!r.changes) return;   // cancelled meanwhile (a reversal): the delivery stays recorded on the adapter's side
-            const ref = JSON.stringify((result && result.ref) || null);
+            const n = await t.exec(sql`UPDATE interaction_effects SET state = 'delivered', attempts = attempts + 1, last_error = NULL, result = ${sql.json(result || null)},
+                updated_at = ${at} WHERE id = ${effect.id} AND state = 'queued'`);
+            if (!n) return;   // cancelled meanwhile (a reversal): the delivery stays recorded on the adapter's side
+            const ref = sql.json((result && result.ref) || null);
             if (effect.effect === 'paid_message' || effect.effect === 'tts') {
-                db.prepare("UPDATE paid_messages SET status = 'delivered', chat_ref = ?, updated_at = ? WHERE interaction_id = ? AND status = 'queued'").run(ref, at, effect.interaction_id);
+                await t.exec(sql`UPDATE paid_messages SET status = 'delivered', chat_ref = ${ref}, updated_at = ${at} WHERE interaction_id = ${effect.interaction_id} AND status = 'queued'`);
             }
             if (effect.effect === 'media_request') {
-                db.prepare("UPDATE paid_media_requests SET status = 'accepted', queue_ref = ?, updated_at = ? WHERE interaction_id = ? AND status = 'queued'").run(ref, at, effect.interaction_id);
+                await t.exec(sql`UPDATE paid_media_requests SET status = 'accepted', queue_ref = ${ref}, updated_at = ${at} WHERE interaction_id = ${effect.interaction_id} AND status = 'queued'`);
             }
-            ctx.interactions.recomputeDelivery(effect.interaction_id);
-        });
+            await ctx.interactions.recomputeDelivery(t, effect.interaction_id);
+        }, ctx.MONEY);
     }
 
-    function markFailed(effect, err) {
-        ctx.tx(() => {
+    async function markFailed(effect, err) {
+        await ctx.tx(async (t) => {
+            await ctx.interactions.lock(t, effect.interaction_id);
             const at = iso(ctx.now());
             const attempts = effect.attempts + 1;
             const final = err.permanent || attempts >= config.chat.maxAttempts;
             const backoff = config.chat.backoffMs[Math.min(attempts - 1, config.chat.backoffMs.length - 1)] || 60000;
-            db.prepare('UPDATE interaction_effects SET state = ?, attempts = ?, next_attempt_at = ?, last_error = ?, updated_at = ? WHERE id = ? AND state = \'queued\'')
-                .run(final ? 'failed' : 'queued', attempts, ctx.now() + backoff, String(err.message || err).slice(0, 500), at, effect.id);
+            await t.exec(sql`UPDATE interaction_effects SET state = ${final ? 'failed' : 'queued'}, attempts = ${attempts}, next_attempt_at = ${ctx.now() + backoff},
+                last_error = ${String(err.message || err).slice(0, 500)}, updated_at = ${at} WHERE id = ${effect.id} AND state = 'queued'`);
             if (final) {
-                if (effect.effect === 'paid_message' || effect.effect === 'tts') db.prepare("UPDATE paid_messages SET status = 'failed', updated_at = ? WHERE interaction_id = ? AND status = 'queued'").run(at, effect.interaction_id);
-                if (effect.effect === 'media_request') db.prepare("UPDATE paid_media_requests SET status = 'failed', updated_at = ? WHERE interaction_id = ? AND status = 'queued'").run(at, effect.interaction_id);
-                ctx.interactions.recomputeDelivery(effect.interaction_id);
+                if (effect.effect === 'paid_message' || effect.effect === 'tts') await t.exec(sql`UPDATE paid_messages SET status = 'failed', updated_at = ${at} WHERE interaction_id = ${effect.interaction_id} AND status = 'queued'`);
+                if (effect.effect === 'media_request') await t.exec(sql`UPDATE paid_media_requests SET status = 'failed', updated_at = ${at} WHERE interaction_id = ${effect.interaction_id} AND status = 'queued'`);
+                await ctx.interactions.recomputeDelivery(t, effect.interaction_id);
             }
-        });
+        }, ctx.MONEY);
         ctx.outboxKick();
     }
 
     async function runOne(effect) {
-        // Re-read: the batch was selected before earlier deliveries awaited; a hide or a reversal may
+        // Re-read: the batch was claimed before earlier deliveries awaited; a hide or a reversal may
         // have cancelled this one since.
-        const current = db.prepare('SELECT state FROM interaction_effects WHERE id = ?').get(effect.id);
+        const current = await db.maybe(sql`SELECT state FROM interaction_effects WHERE id = ${effect.id}`);
         if (!current || current.state !== 'queued') return 'cancelled';
-        const i = ctx.interactions.get(effect.interaction_id);
+        const i = await ctx.interactions.get(db, effect.interaction_id);
         if (!i || i.payment_state !== 'settled') {
             // Reversed or failed before its turn: nothing to deliver.
-            ctx.tx(() => ctx.interactions.cancelQueued(i, 'payment_not_settled'));
+            await ctx.tx(async (t) => { const locked = await ctx.interactions.lock(t, effect.interaction_id); if (locked) await ctx.interactions.cancelQueued(t, locked, 'payment_not_settled'); }, ctx.MONEY);
             return 'cancelled';
         }
         if (i.moderation !== 'visible') {
             // Hidden or held: moderation.js cancels or releases these; never deliver one meanwhile.
-            db.prepare("UPDATE interaction_effects SET state = 'cancelled', last_error = 'hidden by moderation', updated_at = ? WHERE id = ? AND state = 'queued'").run(iso(ctx.now()), effect.id);
+            await db.exec(sql`UPDATE interaction_effects SET state = 'cancelled', last_error = 'hidden by moderation', updated_at = ${iso(ctx.now())}
+                WHERE id = ${effect.id} AND state = 'queued'`);
             return 'cancelled';
         }
         const adapter = ctx.adapters[effect.adapter];
-        if (!adapter) { markFailed(effect, Object.assign(new Error(`no adapter ${effect.adapter} configured`), { permanent: true })); return 'failed'; }
+        if (!adapter) { await markFailed(effect, Object.assign(new Error(`no adapter ${effect.adapter} configured`), { permanent: true })); return 'failed'; }
+        let result;
         try {
-            const result = await adapter.deliver(jobFor(effect, i, ctx.profiles.bySubject(i.creator_subject)));
-            markDone(effect, result);
-            return 'delivered';
+            result = await adapter.deliver(jobFor(effect, i, await ctx.profiles.bySubject(db, i.creator_subject)));
         } catch (e) {
-            markFailed(effect, e);
+            await markFailed(effect, e);
             return 'retry';
         }
+        await markDone(effect, result);
+        return 'delivered';
     }
 
-    /** Deliver every due effect once. */
+    /** Claim a batch of due effects (a lease each), oldest first. */
+    async function claim() {
+        const now = ctx.now();
+        const rows = await db.many(sql`UPDATE interaction_effects SET next_attempt_at = ${now + LEASE_MS}
+            WHERE id IN (SELECT id FROM interaction_effects WHERE state = 'queued' AND next_attempt_at <= ${now}
+                         ORDER BY id LIMIT ${BATCH} FOR UPDATE SKIP LOCKED)
+            RETURNING *`);
+        return rows.sort((a, b) => a.id - b.id);
+    }
+
+    /** Deliver every due effect once (this process's share of them). */
     async function drain() {
         if (running) return { busy: true };
         running = true;
         const out = { delivered: 0, retry: 0, failed: 0, cancelled: 0 };
         try {
             for (;;) {
-                const due = db.prepare("SELECT * FROM interaction_effects WHERE state = 'queued' AND next_attempt_at <= ? ORDER BY id LIMIT 50").all(ctx.now());
+                const due = await claim();
                 if (!due.length) break;
                 for (const e of due) { const r = await runOne(e); out[r] = (out[r] || 0) + 1; }
-                if (due.length < 50) break;
+                if (due.length < BATCH) break;
             }
         } finally { running = false; }
         return out;

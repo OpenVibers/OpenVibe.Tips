@@ -32,15 +32,15 @@ const TYPES = ['tips.interaction.ready', 'tips.interaction.failed', 'tips.intera
         await domain.effects.drain();
         live.state.fail = null;
         t.clock.offset += 11 * 60 * 1000;
-        domain.overlays.sweepFailed();
+        await domain.overlays.sweepFailed();
         t.clock.offset = 0;
         // A reversal before delivery (tips.interaction.cancelled) and one after it.
         const pending = await t.call('POST', '/api/v1/tts-requests', { user: viewer, body: { creator: 'alex', amount: 150, tts: { text: 'read me' } } });
-        const txn = domain.interactions.get(pending.json.interaction.id).billing_txn_id;
+        const txn = (await domain.interactions.get(t.db, pending.json.interaction.id)).billing_txn_id;
         await t.deliver(billing.refund(txn));
-        await t.deliver(billing.refund(domain.interactions.get(tip.json.interaction.id).billing_txn_id, 100));
+        await t.deliver(billing.refund((await domain.interactions.get(t.db, tip.json.interaction.id)).billing_txn_id, 100));
 
-        const rows = t.outboxRows();
+        const rows = await t.outboxRows();
         for (const type of TYPES) assert.ok(rows.some((e) => e.event_type === type), `no ${type} was produced`);
         for (const e of rows) {
             const env = contracts.validate('events.event-envelope@1', e);

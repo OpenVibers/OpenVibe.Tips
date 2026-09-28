@@ -21,7 +21,7 @@ const { boot, check, done } = require('./helpers/app');
         tokenId = r.json.token.id;
         assert.match(secret, /^tovl_[A-Za-z0-9_-]{43}$/);
         assert.strictEqual(r.json.overlay_url, `http://tips.test/overlay/${secret}`);
-        const row = t.db.prepare('SELECT * FROM overlay_tokens WHERE id = ?').get(tokenId);
+        const row = await t.db.maybe('SELECT * FROM overlay_tokens WHERE id = $1', [tokenId]);
         assert.notStrictEqual(row.token_hash, secret);
         assert.ok(!JSON.stringify(row).includes(secret), 'the secret is not stored');
         const list = await t.call('GET', '/api/v1/overlay-tokens', { user: alex });
@@ -48,16 +48,17 @@ const { boot, check, done } = require('./helpers/app');
         assert.strictEqual(g.data.goal.id, goal.id);
         firstAlertSeq = alert.id;
         s.close();
-        const d = t.db.prepare("SELECT * FROM overlay_deliveries WHERE kind = 'alert' AND interaction_id = ?").get(r.json.interaction.id);
+        const d = await t.db.maybe("SELECT * FROM overlay_deliveries WHERE kind = 'alert' AND interaction_id = $1", [r.json.interaction.id]);
         assert.strictEqual(d.status, 'delivered');
-        assert.strictEqual(t.outboxRows('tips.overlay.delivered').filter((e) => e.payload.delivery_id === d.id).length, 1);
+        assert.strictEqual((await t.outboxRows('tips.overlay.delivered')).filter((e) => e.payload.delivery_id === d.id).length, 1);
     });
 
     await check('overlay replay (Last-Event-ID) resends but never charges, re-counts or re-emits', async () => {
+        const goalNow = async () => (await domain.goals.present(t.db, await domain.goals.get(t.db, goal.id))).current_amount;
         const before = {
-            transfers: billing.transfers().length, contributions: t.db.prepare('SELECT COUNT(*) AS n FROM tip_goal_contributions').get().n,
-            goal: domain.goals.present(domain.goals.get(goal.id)).current_amount, delivered: t.outboxRows('tips.overlay.delivered').length,
-            interactions: t.db.prepare('SELECT COUNT(*) AS n FROM tip_interactions').get().n, payable: billing.payable.get(alex.subject),
+            transfers: billing.transfers().length, contributions: await t.db.value('SELECT count(*) FROM tip_goal_contributions'),
+            goal: await goalNow(), delivered: (await t.outboxRows('tips.overlay.delivered')).length,
+            interactions: await t.db.value('SELECT count(*) FROM tip_interactions'), payable: billing.payable.get(alex.subject),
         };
         for (let k = 0; k < 3; k++) {
             const s = await t.sse(`/overlay/${secret}/events`, { lastEventId: firstAlertSeq - 1 });
@@ -66,12 +67,12 @@ const { boot, check, done } = require('./helpers/app');
             s.close();
         }
         assert.strictEqual(billing.transfers().length, before.transfers);
-        assert.strictEqual(t.db.prepare('SELECT COUNT(*) AS n FROM tip_goal_contributions').get().n, before.contributions);
-        assert.strictEqual(domain.goals.present(domain.goals.get(goal.id)).current_amount, before.goal);
-        assert.strictEqual(t.outboxRows('tips.overlay.delivered').length, before.delivered);
-        assert.strictEqual(t.db.prepare('SELECT COUNT(*) AS n FROM tip_interactions').get().n, before.interactions);
+        assert.strictEqual(await t.db.value('SELECT count(*) FROM tip_goal_contributions'), before.contributions);
+        assert.strictEqual(await goalNow(), before.goal);
+        assert.strictEqual((await t.outboxRows('tips.overlay.delivered')).length, before.delivered);
+        assert.strictEqual(await t.db.value('SELECT count(*) FROM tip_interactions'), before.interactions);
         assert.strictEqual(billing.payable.get(alex.subject), before.payable);
-        assert.ok(t.db.prepare('SELECT sends FROM overlay_deliveries WHERE seq = ?').get(firstAlertSeq).sends >= 4);
+        assert.ok(await t.db.value('SELECT sends FROM overlay_deliveries WHERE seq = $1', [firstAlertSeq]) >= 4);
     });
 
     await check('a tip while no overlay is connected waits, is delivered on connect, else fails after the window', async () => {
@@ -83,20 +84,21 @@ const { boot, check, done } = require('./helpers/app');
         await new Promise((ok) => setTimeout(ok, 50));
         const r2 = await t.call('POST', '/api/v1/checkout', { user: viewer, body: { creator: 'alex', amount: 12 } });
         t.clock.offset += 11 * 60 * 1000;
-        const n = domain.overlays.sweepFailed();
+        const n = await domain.overlays.sweepFailed();
         t.clock.offset = 0;
         assert.ok(n >= 1);
-        const d = t.db.prepare("SELECT * FROM overlay_deliveries WHERE kind = 'alert' AND interaction_id = ?").get(r2.json.interaction.id);
+        const d = await t.db.maybe("SELECT * FROM overlay_deliveries WHERE kind = 'alert' AND interaction_id = $1", [r2.json.interaction.id]);
         assert.strictEqual(d.status, 'failed');
-        assert.strictEqual(t.outboxRows('tips.overlay.failed').filter((e) => e.payload.delivery_id === d.id).length, 1);
+        assert.strictEqual((await t.outboxRows('tips.overlay.failed')).filter((e) => e.payload.delivery_id === d.id).length, 1);
         // The payment is untouched by the overlay failure.
-        assert.strictEqual(domain.interactions.get(r2.json.interaction.id).payment_state, 'settled');
+        assert.strictEqual((await domain.interactions.get(t.db, r2.json.interaction.id)).payment_state, 'settled');
     });
 
     await check('simulation runs the full path with test = 1, no Billing call, never counted', async () => {
+        const goalNow = async () => (await domain.goals.present(t.db, await domain.goals.get(t.db, goal.id))).current_amount;
         const before = {
-            transfers: billing.calls.length, goal: domain.goals.present(domain.goals.get(goal.id)).current_amount,
-            totals: domain.interactions.totals(alex.subject), events: t.outboxRows().length,
+            transfers: billing.calls.length, goal: await goalNow(),
+            totals: await domain.interactions.totals(t.db, alex.subject), events: (await t.outboxRows()).length,
         };
         const s = await t.sse(`/overlay/${secret}/events`);
         await s.waitFor((e) => e.event === 'hello');
@@ -114,13 +116,13 @@ const { boot, check, done } = require('./helpers/app');
         const job = t.adapters.test.jobs.find((j) => j.interaction.id === i.id);
         assert.ok(job && job.test === true, 'chat effect delivered to the test adapter, flagged test');
         assert.strictEqual(billing.calls.length, before.transfers, 'no Billing call');
-        assert.strictEqual(domain.goals.present(domain.goals.get(goal.id)).current_amount, before.goal, 'goal unchanged');
-        assert.strictEqual(t.db.prepare('SELECT COUNT(*) AS n FROM tip_goal_contributions WHERE interaction_id = ?').get(i.id).n, 0);
-        const after = domain.interactions.totals(alex.subject);
+        assert.strictEqual(await goalNow(), before.goal, 'goal unchanged');
+        assert.strictEqual(await t.db.value('SELECT count(*) FROM tip_goal_contributions WHERE interaction_id = $1', [i.id]), 0);
+        const after = await domain.interactions.totals(t.db, alex.subject);
         assert.strictEqual(after.settled_via_billing, before.totals.settled_via_billing);
         assert.strictEqual(after.interactions, before.totals.interactions);
         assert.strictEqual(after.simulations, before.totals.simulations + 1);
-        assert.strictEqual(t.outboxRows().length, before.events, 'no durable events for a simulation');
+        assert.strictEqual((await t.outboxRows()).length, before.events, 'no durable events for a simulation');
         const denied = await t.call('POST', '/api/v1/simulate', { user: viewer, body: { creator: 'alex' } });
         assert.strictEqual(denied.status, 403);
     });

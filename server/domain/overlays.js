@@ -1,16 +1,17 @@
 'use strict';
 
 /**
- * Overlays: scoped, revocable tokens; configs; deliveries; the live SSE hub.
+ * Overlays: scoped, revocable tokens; configs; deliveries; the live SSE streams (overlay-hub.js).
  *
  * Tokens. `tovl_<43 base64url chars>` shown ONCE at creation; only its SHA-256 is stored. A token
  * carries scopes (alerts, goals), optionally a config, and is never a creator cookie: an OBS
  * browser source holds it in its URL and nothing else. Revocation is immediate: the row is marked
- * and every open stream of that token is closed in the same call.
+ * and every open stream of that token, in any process, is told and closed.
  *
  * Deliveries. Every alert (a settled interaction) and goal change becomes one overlay_deliveries
  * row with a monotonic seq (the SSE event id). The first time a row is written to any overlay it
- * becomes `delivered` and emits tips.overlay.delivered; a row no overlay received within the
+ * becomes `delivered` and emits tips.overlay.delivered (recorded just before the bytes are written);
+ * a row no overlay received within the
  * delivery window becomes `failed` (tips.overlay.failed). A reconnect with Last-Event-ID
  * REPLAYS rows after that id: replay only writes bytes to a socket — it never charges, never
  * re-counts a goal, never emits another event. Simulated (test) rows are flagged and emit nothing.
@@ -22,62 +23,70 @@
  * sent, replayed or listed again — and tells connected overlays to drop it (`retract` event).
  */
 const crypto = require('crypto');
-const { fail, iso, prefixedId, sha256, json, text } = require('../util');
+const { sql } = require('openvibe-sdk/db');
+const { fail, iso, prefixedId, sha256, text } = require('../util');
 const { safeUrl } = require('./profiles');
-const { isHidden } = require('./privacy');
+const { isHidden, publicView } = require('./privacy');
+const { createOverlayHub } = require('./overlay-hub');
 
 const SCOPES = ['alerts', 'goals'];
+const STREAM_LOCK = 4610;   // the advisory-lock namespace of a creator's overlay stream (Tips' port)
 const TOKEN_RE = /^tovl_[A-Za-z0-9_-]{43}$/;
+// A delivery row with the interaction's real amount (an overlay's minimum applies to a hidden amount too).
+const DELIVERY_COLUMNS = sql`d.*, i.amount AS interaction_amount`;
+const DELIVERY_FROM = sql`overlay_deliveries d LEFT JOIN tip_interactions i ON i.id = d.interaction_id`;
 
 function createOverlays(ctx) {
     const { db } = ctx;
-    const clients = new Map();   // creator subject → Set<client>
-    let nextClient = 1;
+    const hub = createOverlayHub({ valkey: ctx.valkey, pushNew, heartbeatMs: ctx.config.overlays.heartbeatMs, log: ctx.log });
 
     // ── Tokens ───────────────────────────────────────────────
-    function createToken(creator, { scopes, label, configId, createdBy }) {
+    async function createToken(creator, { scopes, label, configId, createdBy }) {
         const list = Array.isArray(scopes) && scopes.length ? [...new Set(scopes.map(String))] : SCOPES;
         if (list.some((s) => !SCOPES.includes(s))) fail(422, 'tips.invalid_input', `scopes must be among ${SCOPES.join(', ')}`);
         if (configId) {
-            const c = getConfig(configId);
+            const c = await getConfig(db, configId);
             if (!c || c.creator_subject !== creator) fail(404, 'tips.overlay_config_not_found', 'no such overlay config for this creator');
         }
-        const active = db.prepare('SELECT COUNT(*) AS n FROM overlay_tokens WHERE creator_subject = ? AND revoked_at IS NULL').get(creator).n;
-        if (active >= 25) fail(409, 'tips.too_many_tokens', 'revoke an overlay token before creating another (25 active at most)');
         const secret = `tovl_${crypto.randomBytes(32).toString('base64url')}`;
-        const id = prefixedId('tovt', ctx.now());
-        db.prepare(`INSERT INTO overlay_tokens (id, creator_subject, token_hash, scopes, config_id, label, created_by, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(id, creator, sha256(secret), JSON.stringify(list), configId || null, text(label, 'label', 80), createdBy, iso(ctx.now()));
-        return { token: presentToken(getToken(id)), secret, overlay_url: `${ctx.config.baseUrl}/overlay/${secret}`, events_url: `${ctx.config.baseUrl}/overlay/${secret}/events` };
+        const row = await ctx.tx(async (t) => {
+            await ctx.lockCreator(t, creator);
+            const active = await t.value(sql`SELECT count(*) FROM overlay_tokens WHERE creator_subject = ${creator} AND revoked_at IS NULL`);
+            if (active >= 25) fail(409, 'tips.too_many_tokens', 'revoke an overlay token before creating another (25 active at most)');
+            return t.one(sql`INSERT INTO overlay_tokens (id, creator_subject, token_hash, scopes, config_id, label, created_by, created_at)
+                VALUES (${prefixedId('tovt', ctx.now())}, ${creator}, ${sha256(secret)}, ${sql.json(list)}, ${configId || null}, ${text(label, 'label', 80)}, ${createdBy}, ${iso(ctx.now())})
+                RETURNING *`);
+        });
+        return { token: presentToken(row), secret, overlay_url: `${ctx.config.baseUrl}/overlay/${secret}`, events_url: `${ctx.config.baseUrl}/overlay/${secret}/events` };
     }
-    const getToken = (id) => db.prepare('SELECT * FROM overlay_tokens WHERE id = ?').get(String(id || '')) || null;
-    const listTokens = (creator) => db.prepare('SELECT * FROM overlay_tokens WHERE creator_subject = ? ORDER BY revoked_at IS NOT NULL, created_at DESC').all(creator);
+    const getToken = (q, id) => q.maybe(sql`SELECT * FROM overlay_tokens WHERE id = ${String(id || '')}`);
+    const listTokens = (q, creator) => q.many(sql`SELECT * FROM overlay_tokens WHERE creator_subject = ${creator} ORDER BY revoked_at IS NOT NULL, created_at DESC`);
 
     /** The active token row for a presented secret, or null (unknown, malformed or revoked). */
-    function authenticate(secret) {
+    async function authenticate(q, secret) {
         if (!TOKEN_RE.test(String(secret || ''))) return null;
-        const row = db.prepare('SELECT * FROM overlay_tokens WHERE token_hash = ?').get(sha256(secret));
+        const row = await q.maybe(sql`SELECT * FROM overlay_tokens WHERE token_hash = ${sha256(secret)}`);
         if (!row || row.revoked_at) return null;
-        return { ...row, scopes: json(row.scopes, []) };
+        return row;
     }
 
-    function revokeToken(row) {
-        if (!row.revoked_at) db.prepare('UPDATE overlay_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL').run(iso(ctx.now()), row.id);
-        closeToken(row.id);
-        return presentToken(getToken(row.id));
+    async function revokeToken(row) {
+        const out = await db.maybe(sql`UPDATE overlay_tokens SET revoked_at = ${iso(ctx.now())} WHERE id = ${row.id} AND revoked_at IS NULL RETURNING *`);
+        await hub.revoke(row.creator_subject, row.id);
+        return presentToken(out || await getToken(db, row.id));
     }
 
     function presentToken(t) {
         if (!t) return null;
         return {
-            id: t.id, creator: { type: 'user', id: t.creator_subject }, scopes: json(t.scopes, []), label: t.label || null, config_id: t.config_id || null,
+            id: t.id, creator: { type: 'user', id: t.creator_subject }, scopes: t.scopes, label: t.label || null, config_id: t.config_id || null,
             created_at: t.created_at, last_used_at: t.last_used_at || null, revoked_at: t.revoked_at || null, active: !t.revoked_at,
         };
     }
 
     // ── Configs ──────────────────────────────────────────────
-    const getConfig = (id) => db.prepare('SELECT * FROM overlay_configs WHERE id = ?').get(String(id || '')) || null;
-    const listConfigs = (creator) => db.prepare('SELECT * FROM overlay_configs WHERE creator_subject = ? ORDER BY created_at').all(creator);
+    const getConfig = (q, id) => q.maybe(sql`SELECT * FROM overlay_configs WHERE id = ${String(id || '')}`);
+    const listConfigs = (q, creator) => q.many(sql`SELECT * FROM overlay_configs WHERE creator_subject = ${creator} ORDER BY created_at`);
 
     function settingsOf(kind, input = {}, base = {}) {
         const s = { ...base };
@@ -110,236 +119,248 @@ function createOverlays(ctx) {
         goal: { show_amounts: true, show_percent: true },
     };
 
-    function createConfig(creator, input = {}) {
+    async function createConfig(creator, input = {}) {
         const kind = input.kind === 'goal' ? 'goal' : input.kind === 'alerts' ? 'alerts' : fail(422, 'tips.invalid_input', "kind must be 'alerts' or 'goal'");
         const name = text(input.name, 'name', 80) || (kind === 'alerts' ? 'Alerts' : 'Goal');
         let goalId = null;
         if (kind === 'goal' && input.goal_id) {
-            const g = ctx.goals.get(input.goal_id);
+            const g = await ctx.goals.get(db, input.goal_id);
             if (!g || g.creator_subject !== creator) fail(404, 'tips.goal_not_found', 'no such goal for this creator');
             goalId = g.id;
         }
-        const id = prefixedId('tovc', ctx.now());
         const at = iso(ctx.now());
-        db.prepare(`INSERT INTO overlay_configs (id, creator_subject, kind, name, settings, goal_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-            .run(id, creator, kind, name, JSON.stringify(settingsOf(kind, input, DEFAULTS[kind])), goalId, at, at);
-        return presentConfig(getConfig(id));
+        const row = await db.one(sql`INSERT INTO overlay_configs (id, creator_subject, kind, name, settings, goal_id, created_at, updated_at)
+            VALUES (${prefixedId('tovc', ctx.now())}, ${creator}, ${kind}, ${name}, ${sql.json(settingsOf(kind, input, DEFAULTS[kind]))}, ${goalId}, ${at}, ${at}) RETURNING *`);
+        return presentConfig(row);
     }
 
-    function updateConfig(c, input = {}) {
-        if (input.revision != null && Number(input.revision) !== c.revision) fail(409, 'tips.revision_conflict', `the config is at revision ${c.revision}`);
-        const settings = settingsOf(c.kind, input, json(c.settings, {}));
+    /**
+     * A settings change on the locked row (two at once apply one after the other); with `revision` it
+     * applies only to that revision (else 409).
+     */
+    function updateConfig(config, input = {}) {
+        return ctx.tx(async (t) => {
+            const c = await t.one(sql`SELECT * FROM overlay_configs WHERE id = ${config.id} FOR UPDATE`);
+            if (input.revision != null && Number(input.revision) !== c.revision) fail(409, 'tips.revision_conflict', `the config is at revision ${c.revision}`);
+            return changeConfig(t, c, input);
+        });
+    }
+    async function changeConfig(t, c, input) {
+        const settings = settingsOf(c.kind, input, c.settings || {});
         let goalId = c.goal_id;
         if (c.kind === 'goal' && input.goal_id !== undefined) {
             if (!input.goal_id) goalId = null;
             else {
-                const g = ctx.goals.get(input.goal_id);
+                const g = await ctx.goals.get(t, input.goal_id);
                 if (!g || g.creator_subject !== c.creator_subject) fail(404, 'tips.goal_not_found', 'no such goal for this creator');
                 goalId = g.id;
             }
         }
         const name = input.name !== undefined ? (text(input.name, 'name', 80) || c.name) : c.name;
-        db.prepare('UPDATE overlay_configs SET name = ?, settings = ?, goal_id = ?, revision = revision + 1, updated_at = ? WHERE id = ?')
-            .run(name, JSON.stringify(settings), goalId, iso(ctx.now()), c.id);
-        const out = presentConfig(getConfig(c.id));
-        // Open overlays using this config pick the change up at once.
-        for (const cl of clients.get(c.creator_subject) || []) if (cl.configId === c.id) write(cl, 'config', null, { config: out });
+        const out = presentConfig(await t.one(sql`UPDATE overlay_configs SET name = ${name}, settings = ${sql.json(settings)}, goal_id = ${goalId},
+            revision = revision + 1, updated_at = ${iso(ctx.now())} WHERE id = ${c.id} RETURNING *`));
+        // Open overlays using this config, in any process, pick the change up once it is committed.
+        t.after(() => hub.config(c.creator_subject, out));
         return out;
     }
 
     function presentConfig(c) {
         if (!c) return null;
-        return { id: c.id, creator: { type: 'user', id: c.creator_subject }, kind: c.kind, name: c.name, settings: json(c.settings, {}), goal_id: c.goal_id || null, revision: c.revision, created_at: c.created_at, updated_at: c.updated_at };
+        return { id: c.id, creator: { type: 'user', id: c.creator_subject }, kind: c.kind, name: c.name, settings: c.settings || {}, goal_id: c.goal_id || null, revision: c.revision, created_at: c.created_at, updated_at: c.updated_at };
     }
 
     // ── Deliveries ───────────────────────────────────────────
-    function insertDelivery(creator, kind, { interactionId = null, goalId = null, payload, test = false, dedupe }) {
-        const id = prefixedId('tovd', ctx.now());
-        const r = db.prepare(`INSERT OR IGNORE INTO overlay_deliveries (id, creator_subject, kind, interaction_id, goal_id, payload, test, status, dedupe_key, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`).run(id, creator, kind, interactionId, goalId, JSON.stringify(payload), test ? 1 : 0, dedupe, iso(ctx.now()));
-        if (r.changes) ctx.afterCommit(() => notify(creator));
-        return r.changes ? id : null;
+    /**
+     * Inside a transaction. Open overlays hear of it once the transaction committed.
+     *
+     * A row's seq comes from its identity when it is inserted, but other processes see it only at commit.
+     * Two transactions of one creator committing out of order (seq 101 before 100) would let a stream move
+     * past 100 before 100 exists for it, and never send it. So a creator's deliveries are inserted under
+     * a transaction-scoped advisory lock (allowed through PgBouncer): the next insert for that creator
+     * waits for the previous transaction to end, and a creator's seqs become visible in order.
+     */
+    async function insertDelivery(t, creator, kind, { interactionId = null, goalId = null, payload, test = false, dedupe }) {
+        await t.query(sql`SELECT pg_advisory_xact_lock(${STREAM_LOCK}, hashtext(${creator}))`);
+        const row = await t.maybe(sql`INSERT INTO overlay_deliveries (id, creator_subject, kind, interaction_id, goal_id, payload, test, status, dedupe_key, created_at)
+            VALUES (${prefixedId('tovd', ctx.now())}, ${creator}, ${kind}, ${interactionId}, ${goalId}, ${sql.json(payload)}, ${!!test}, 'pending', ${dedupe}, ${iso(ctx.now())})
+            ON CONFLICT DO NOTHING RETURNING id`);
+        if (row) ctx.afterCommit(t, () => hub.notify(creator));
+        return row ? row.id : null;
     }
 
-    /** Inside the settlement transaction (or a simulation). */
-    function addAlert(interaction) {
-        const payload = ctx.view(interaction, { at: iso(ctx.now()) });
-        return insertDelivery(interaction.creator_subject, 'alert', { interactionId: interaction.id, payload, test: interaction.test, dedupe: `alert:${interaction.id}` });
+    /** Inside the settlement transaction (or a simulation). `filter`: the creator's word filter. */
+    function addAlert(t, interaction, filter) {
+        const payload = publicView(interaction, { at: iso(ctx.now()), filter });
+        return insertDelivery(t, interaction.creator_subject, 'alert', { interactionId: interaction.id, payload, test: interaction.test, dedupe: `alert:${interaction.id}` });
     }
 
     /**
-     * Inside a transaction: the interaction's public view changed. Its alert payload is rewritten, and
-     * the goal updates it caused no longer name anyone.
+     * Inside a transaction: these interactions' public view changed (an erasure, a moderation). Their
+     * alert payloads are rewritten and the goal updates they caused no longer name anyone, in one read
+     * and one write. `filters`: Map(creator → the creator's word filter).
      */
-    function refreshInteraction(interaction) {
-        const view = ctx.view(interaction);
-        for (const row of db.prepare('SELECT seq, kind, payload FROM overlay_deliveries WHERE interaction_id = ?').all(interaction.id)) {
-            const old = json(row.payload, {});
-            const payload = row.kind === 'alert' ? ctx.view(interaction, { at: old.at }) : { ...old, by: interaction.hide_amount || isHidden(interaction) ? null : view.supporter_name };
-            db.prepare('UPDATE overlay_deliveries SET payload = ? WHERE seq = ?').run(JSON.stringify(payload), row.seq);
-        }
+    async function refreshInteractions(t, interactions, filters) {
+        if (!interactions.length) return;
+        const byId = new Map(interactions.map((i) => [i.id, i]));
+        const rows = await t.many(sql`SELECT seq, kind, payload, interaction_id FROM overlay_deliveries WHERE interaction_id = ANY(${[...byId.keys()]})`);
+        if (!rows.length) return;
+        const updates = rows.map((row) => {
+            const i = byId.get(row.interaction_id);
+            const filter = filters.get(i.creator_subject) || null;
+            const old = row.payload || {};
+            const payload = row.kind === 'alert' ? publicView(i, { at: old.at, filter })
+                : { ...old, by: i.hide_amount || isHidden(i) ? null : publicView(i, { filter }).supporter_name };
+            return { seq: row.seq, payload };
+        });
+        await t.exec(sql`UPDATE overlay_deliveries d SET payload = v.payload
+            FROM jsonb_to_recordset(${sql.json(updates)}) AS v(seq bigint, payload jsonb) WHERE d.seq = v.seq`);
     }
+    const refreshInteraction = (t, interaction, filter) => refreshInteractions(t, [interaction], new Map([[interaction.creator_subject, filter]]));
 
     /** Inside a transaction: a moderator hid the interaction. Its alert is never sent or replayed again. */
-    function retract(interaction) {
-        db.prepare("UPDATE overlay_deliveries SET hidden = 1 WHERE interaction_id = ? AND kind = 'alert'").run(interaction.id);
-        refreshInteraction(interaction);
-        const rows = db.prepare("SELECT id, seq FROM overlay_deliveries WHERE interaction_id = ? AND kind = 'alert'").all(interaction.id);
-        ctx.afterCommit(() => {
-            for (const c of clients.get(interaction.creator_subject) || []) {
-                if (!c.scopes.includes('alerts')) continue;
-                for (const r of rows) write(c, 'retract', null, { interaction_id: interaction.id, delivery_id: r.id, seq: r.seq });
-            }
-        });
+    async function retract(t, interaction, filter) {
+        const rows = await t.many(sql`UPDATE overlay_deliveries SET hidden = true WHERE interaction_id = ${interaction.id} AND kind = 'alert' RETURNING id, seq`);
+        await refreshInteraction(t, interaction, filter);
+        if (rows.length) ctx.afterCommit(t, () => hub.retract(interaction.creator_subject, interaction.id, rows.map((r) => ({ id: r.id, seq: r.seq }))));
     }
 
     /** Inside a transaction: shown again. Back in /state and replays; open overlays are not re-alerted. */
-    function unretract(interaction) {
-        db.prepare("UPDATE overlay_deliveries SET hidden = 0 WHERE interaction_id = ? AND kind = 'alert'").run(interaction.id);
-        refreshInteraction(interaction);
+    async function unretract(t, interaction, filter) {
+        await t.exec(sql`UPDATE overlay_deliveries SET hidden = false WHERE interaction_id = ${interaction.id} AND kind = 'alert'`);
+        await refreshInteraction(t, interaction, filter);
     }
 
-    function addGoalDelivery(creator, goalView, { reason, interactionId, by, dedupe, test = false }) {
-        return insertDelivery(creator, 'goal', { interactionId, goalId: goalView.id, payload: { goal: goalView, reason, by: by || null, test }, test, dedupe });
-    }
-
-    /** First write of a pending row: delivered + the event (never for tests). */
-    function markDelivered(row) {
-        ctx.tx(() => {
-            const r = db.prepare("UPDATE overlay_deliveries SET status = 'delivered', delivered_at = ? WHERE seq = ? AND status = 'pending'").run(iso(ctx.now()), row.seq);
-            if (r.changes && !row.test) {
-                ctx.outbox.emit('tips.overlay.delivered', { type: 'overlay_delivery', id: row.id }, {
-                    delivery_id: row.id, creator: { type: 'user', id: row.creator_subject }, kind: row.kind, interaction_id: row.interaction_id, goal_id: row.goal_id,
-                });
-            }
-        });
-        ctx.outboxKick();
-    }
-
-    /** Pending rows older than the window → failed (tips.overlay.failed). Returns how many. */
-    function sweepFailed() {
-        const cutoff = iso(ctx.now() - ctx.config.overlays.ttlMs);
-        const rows = db.prepare("SELECT * FROM overlay_deliveries WHERE status = 'pending' AND hidden = 0 AND created_at < ? ORDER BY seq LIMIT 500").all(cutoff);
-        if (!rows.length) return 0;
-        ctx.tx(() => {
-            for (const row of rows) {
-                const r = db.prepare("UPDATE overlay_deliveries SET status = 'failed', failed_at = ? WHERE seq = ? AND status = 'pending'").run(iso(ctx.now()), row.seq);
-                if (r.changes && !row.test) {
-                    ctx.outbox.emit('tips.overlay.failed', { type: 'overlay_delivery', id: row.id }, {
-                        delivery_id: row.id, creator: { type: 'user', id: row.creator_subject }, kind: row.kind, interaction_id: row.interaction_id,
-                        goal_id: row.goal_id, reason: 'no overlay showed it within the delivery window',
-                    });
-                }
-            }
-        });
-        ctx.outboxKick();
-        return rows.length;
-    }
-
-    // ── SSE hub ──────────────────────────────────────────────
-    const scopeOf = (kind) => (kind === 'alert' ? 'alerts' : 'goals');
-
-    function write(client, event, id, data) {
-        if (client.closed) return false;
-        try {
-            client.res.write(`${id != null ? `id: ${id}\n` : ''}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-            return true;
-        } catch { return false; }
-    }
-
-    function send(client, row) {
-        client.lastSeq = Math.max(client.lastSeq, row.seq);
-        if (row.hidden || !client.scopes.includes(scopeOf(row.kind))) return;
-        const payload = json(row.payload, {});
-        if (row.kind === 'alert' && client.minAmount && !row.test) {
-            // A hidden amount is not in the payload; the threshold still applies to the real one.
-            const amount = payload.amount != null ? payload.amount : (db.prepare('SELECT amount FROM tip_interactions WHERE id = ?').get(row.interaction_id) || {}).amount;
-            if (amount < client.minAmount) return;
-        }
-        if (!write(client, row.kind, row.seq, { delivery_id: row.id, seq: row.seq, ...payload })) return;
-        db.prepare('UPDATE overlay_deliveries SET sends = sends + 1 WHERE seq = ?').run(row.seq);
-        if (row.status === 'pending') markDelivered(row);
-    }
-
-    function pushNew(client) {
-        const rows = db.prepare("SELECT * FROM overlay_deliveries WHERE creator_subject = ? AND seq > ? AND status != 'failed' AND hidden = 0 ORDER BY seq LIMIT 200").all(client.creator, client.lastSeq);
-        for (const row of rows) send(client, row);
-    }
-
-    function notify(creator) {
-        for (const c of clients.get(creator) || []) pushNew(c);
+    function addGoalDelivery(t, creator, goalView, { reason, interactionId, by, dedupe, test = false }) {
+        return insertDelivery(t, creator, 'goal', { interactionId, goalId: goalView.id, payload: { goal: goalView, reason, by: by || null, test }, test, dedupe });
     }
 
     /**
-     * Attach an SSE response. lastEventId (Last-Event-ID): replay what came after it (bounded).
-     * Without it: what is still pending within the window, then everything new.
+     * About to write these rows to an overlay: count the sends, and the first write of a pending row
+     * makes it delivered + the event (never for tests). One transaction for the batch.
      */
-    function attach(token, res, { lastEventId, config } = {}) {
-        const settings = config ? json(config.settings, {}) : {};
-        const client = {
-            id: nextClient++, creator: token.creator_subject, tokenId: token.id, scopes: token.scopes, configId: token.config_id || null,
-            minAmount: config && config.kind === 'alerts' ? Number(settings.min_amount) || 0 : 0, res, lastSeq: 0, closed: false,
-        };
-        if (!clients.has(client.creator)) clients.set(client.creator, new Set());
-        clients.get(client.creator).add(client);
-        db.prepare('UPDATE overlay_tokens SET last_used_at = ? WHERE id = ?').run(iso(ctx.now()), token.id);
-
-        const maxSeq = db.prepare('SELECT COALESCE(MAX(seq), 0) AS n FROM overlay_deliveries WHERE creator_subject = ?').get(client.creator).n;
-        write(client, 'hello', null, {
-            creator: { type: 'user', id: client.creator }, scopes: client.scopes, config: config ? presentConfig(config) : null,
-            goals: client.scopes.includes('goals') ? ctx.goals.list(client.creator, { status: 'active' }).map((g) => ctx.goals.present(g)) : [],
-            resumed_from: lastEventId != null ? lastEventId : null,
-        });
-        const last = Number(lastEventId);
-        if (lastEventId != null && Number.isInteger(last) && last >= 0) {
-            const limit = ctx.config.overlays.replayLimit;
-            const rows = db.prepare("SELECT * FROM overlay_deliveries WHERE creator_subject = ? AND seq > ? AND status != 'failed' AND hidden = 0 ORDER BY seq DESC LIMIT ?").all(client.creator, last, limit).reverse();
-            client.lastSeq = rows.length ? rows[0].seq - 1 : maxSeq;
-            for (const row of rows) send(client, row);
-            client.lastSeq = Math.max(client.lastSeq, maxSeq);
-        } else {
-            const cutoff = iso(ctx.now() - ctx.config.overlays.ttlMs);
-            const pending = db.prepare("SELECT * FROM overlay_deliveries WHERE creator_subject = ? AND status = 'pending' AND hidden = 0 AND created_at >= ? ORDER BY seq LIMIT 100").all(client.creator, cutoff);
-            for (const row of pending) send(client, row);
-            client.lastSeq = Math.max(client.lastSeq, maxSeq);
-        }
-        pushNew(client);
-        const beat = setInterval(() => { if (!write(client, 'ping', null, { t: Date.now() })) detach(client); }, ctx.config.overlays.heartbeatMs);
-        if (beat.unref) beat.unref();
-        client.beat = beat;
-        res.on('close', () => detach(client));
-        return client;
-    }
-
-    function detach(client) {
-        if (client.closed) return;
-        client.closed = true;
-        clearInterval(client.beat);
-        const set = clients.get(client.creator);
-        if (set) { set.delete(client); if (!set.size) clients.delete(client.creator); }
-        try { client.res.end(); } catch { /* already gone */ }
-    }
-
-    function closeToken(tokenId) {
-        for (const set of clients.values()) {
-            for (const c of [...set]) {
-                if (c.tokenId === tokenId) { write(c, 'revoked', null, { reason: 'this overlay token was revoked' }); detach(c); }
+    async function recordSends(rows) {
+        const pending = rows.filter((r) => r.status === 'pending').map((r) => r.seq);
+        await ctx.tx(async (t) => {
+            await t.exec(sql`UPDATE overlay_deliveries SET sends = sends + 1 WHERE seq = ANY(${rows.map((r) => r.seq)})`);
+            if (!pending.length) return;
+            const done = await t.many(sql`UPDATE overlay_deliveries SET status = 'delivered', delivered_at = ${iso(ctx.now())}
+                WHERE seq = ANY(${pending}) AND status = 'pending' RETURNING id, creator_subject, kind, interaction_id, goal_id, test`);
+            for (const row of done) {
+                if (row.test) continue;
+                await ctx.outbox.emit(t, 'tips.overlay.delivered', { type: 'overlay_delivery', id: row.id }, {
+                    delivery_id: row.id, creator: { type: 'user', id: row.creator_subject }, kind: row.kind, interaction_id: row.interaction_id, goal_id: row.goal_id,
+                });
             }
-        }
+            if (done.some((r) => !r.test)) t.after(ctx.outboxKick);
+        });
     }
 
-    function connected(creator) { return (clients.get(creator) || new Set()).size; }
-    function streamsFor(token) { let n = 0; for (const c of clients.get(token.creator_subject) || []) if (c.tokenId === token.id) n++; return n; }
-    function closeAll() { for (const set of clients.values()) for (const c of [...set]) detach(c); }
+    /**
+     * Pending rows older than the window → failed (tips.overlay.failed). Returns how many. Rows are
+     * claimed with SKIP LOCKED, so processes sweeping at once never fail a row twice.
+     */
+    async function sweepFailed() {
+        const cutoff = iso(ctx.now() - ctx.config.overlays.ttlMs);
+        const n = await ctx.tx(async (t) => {
+            const rows = await t.many(sql`UPDATE overlay_deliveries SET status = 'failed', failed_at = ${iso(ctx.now())}
+                WHERE seq IN (SELECT seq FROM overlay_deliveries WHERE status = 'pending' AND NOT hidden AND created_at < ${cutoff}
+                              ORDER BY seq LIMIT 500 FOR UPDATE SKIP LOCKED)
+                RETURNING id, seq, creator_subject, kind, interaction_id, goal_id, test`);
+            rows.sort((a, b) => a.seq - b.seq);
+            for (const row of rows) {
+                if (row.test) continue;
+                await ctx.outbox.emit(t, 'tips.overlay.failed', { type: 'overlay_delivery', id: row.id }, {
+                    delivery_id: row.id, creator: { type: 'user', id: row.creator_subject }, kind: row.kind, interaction_id: row.interaction_id,
+                    goal_id: row.goal_id, reason: 'no overlay showed it within the delivery window',
+                });
+            }
+            return rows.length;
+        });
+        if (n) ctx.outboxKick();
+        return n;
+    }
 
-    function recentDeliveries(creator, limit = 50) {
-        return db.prepare('SELECT seq, id, kind, interaction_id, goal_id, test, status, hidden, sends, created_at, delivered_at, failed_at FROM overlay_deliveries WHERE creator_subject = ? ORDER BY seq DESC LIMIT ?').all(creator, limit);
+    // ── Streams (overlay-hub.js) ─────────────────────────────
+    const scopeOf = (kind) => (kind === 'alert' ? 'alerts' : 'goals');
+
+    /** Write these rows to a client (scopes, retractions and its minimum applied), after recording them. */
+    async function deliver(client, rows) {
+        const shown = [];
+        for (const row of rows) {
+            client.lastSeq = Math.max(client.lastSeq, row.seq);
+            if (row.hidden || !client.scopes.includes(scopeOf(row.kind))) continue;
+            const payload = row.payload || {};
+            if (row.kind === 'alert' && client.minAmount && !row.test) {
+                // A hidden amount is not in the payload; the threshold still applies to the real one.
+                const amount = payload.amount != null ? payload.amount : row.interaction_amount;
+                if (amount < client.minAmount) continue;
+            }
+            shown.push({ row, payload });
+        }
+        if (!shown.length || client.closed) return;
+        await recordSends(shown.map((x) => x.row));
+        for (const { row, payload } of shown) hub.write(client, row.kind, row.seq, { delivery_id: row.id, seq: row.seq, ...payload });
+    }
+
+    async function pushNew(client) {
+        const rows = await db.many(sql`SELECT ${DELIVERY_COLUMNS} FROM ${DELIVERY_FROM}
+            WHERE d.creator_subject = ${client.creator} AND d.seq > ${client.lastSeq} AND d.status <> 'failed' AND NOT d.hidden ORDER BY d.seq LIMIT 200`);
+        await deliver(client, rows);
+    }
+
+    /** A stream place for this token (TIPS_OVERLAY_MAX_STREAMS across processes), or null: answer 429. */
+    const reserveStream = (token) => hub.reserve(token, ctx.config.overlays.maxStreamsPerToken);
+    const releaseStream = (slot) => hub.release(slot);
+
+    /**
+     * Attach an SSE response (its slot from reserveStream). lastEventId (Last-Event-ID): replay what
+     * came after it (bounded). Without it: what is still pending within the window, then everything new.
+     */
+    function attach(token, res, slot, { lastEventId, config } = {}) {
+        const settings = config ? config.settings || {} : {};
+        const minAmount = config && config.kind === 'alerts' ? Number(settings.min_amount) || 0 : 0;
+        return hub.attach(token, res, slot, { minAmount, configId: token.config_id || null }, async (client) => {
+            await db.exec(sql`UPDATE overlay_tokens SET last_used_at = ${iso(ctx.now())} WHERE id = ${token.id}`);
+            const maxSeq = await db.value(sql`SELECT COALESCE(MAX(seq), 0) FROM overlay_deliveries WHERE creator_subject = ${client.creator}`);
+            const goals = client.scopes.includes('goals') ? await ctx.goals.presentMany(db, await ctx.goals.list(db, client.creator, { status: 'active' })) : [];
+            hub.write(client, 'hello', null, {
+                creator: { type: 'user', id: client.creator }, scopes: client.scopes, config: config ? presentConfig(config) : null,
+                goals, resumed_from: lastEventId != null ? lastEventId : null,
+            });
+            const last = Number(lastEventId);
+            if (lastEventId != null && Number.isInteger(last) && last >= 0) {
+                const limit = ctx.config.overlays.replayLimit;
+                const rows = (await db.many(sql`SELECT ${DELIVERY_COLUMNS} FROM ${DELIVERY_FROM}
+                    WHERE d.creator_subject = ${client.creator} AND d.seq > ${last} AND d.status <> 'failed' AND NOT d.hidden ORDER BY d.seq DESC LIMIT ${limit}`)).reverse();
+                client.lastSeq = rows.length ? rows[0].seq - 1 : maxSeq;
+                await deliver(client, rows);
+                client.lastSeq = Math.max(client.lastSeq, maxSeq);
+            } else {
+                const cutoff = iso(ctx.now() - ctx.config.overlays.ttlMs);
+                const pending = await db.many(sql`SELECT ${DELIVERY_COLUMNS} FROM ${DELIVERY_FROM}
+                    WHERE d.creator_subject = ${client.creator} AND d.status = 'pending' AND NOT d.hidden AND d.created_at >= ${cutoff} ORDER BY d.seq LIMIT 100`);
+                await deliver(client, pending);
+                client.lastSeq = Math.max(client.lastSeq, maxSeq);
+            }
+        });
+    }
+
+    function recentDeliveries(q, creator, limit = 50) {
+        return q.many(sql`SELECT seq, id, kind, interaction_id, goal_id, test, status, hidden, sends, created_at, delivered_at, failed_at
+            FROM overlay_deliveries WHERE creator_subject = ${creator} ORDER BY seq DESC LIMIT ${limit}`);
+    }
+
+    /** The newest alerts of a creator, for GET /overlay/:token/state. */
+    async function recentAlerts(q, creator) {
+        return (await q.many(sql`SELECT seq, payload, test, created_at FROM overlay_deliveries WHERE creator_subject = ${creator} AND kind = 'alert' AND NOT hidden
+            ORDER BY seq DESC LIMIT 20`)).map((d) => ({ seq: d.seq, ...(d.payload || {}), test: !!d.test, created_at: d.created_at }));
     }
 
     return {
         SCOPES, createToken, getToken, listTokens, authenticate, revokeToken, presentToken,
         getConfig, listConfigs, createConfig, updateConfig, presentConfig,
-        addAlert, refreshInteraction, retract, unretract, addGoalDelivery, sweepFailed, attach, detach, closeToken, notify, connected, streamsFor, closeAll, recentDeliveries,
+        addAlert, refreshInteraction, refreshInteractions, retract, unretract, addGoalDelivery, sweepFailed, reserveStream, releaseStream, attach,
+        connected: hub.connected, closeAll: () => hub.closeAll(), close: () => hub.close(), recentDeliveries, recentAlerts,
     };
 }
 

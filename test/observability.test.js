@@ -1,6 +1,7 @@
 'use strict';
 // Track O: GET /metrics answers direct loopback callers only, labels requests by route template and
-// carries the Tips gauges; /api/ready is 503 only when the database fails, and a missing Billing,
+// carries the Tips gauges; /api/ready is 503 only when the database fails, reports the store that
+// answered (db.ready()) and Valkey (valkey.ready(), skipped without VALKEY_URL), and a missing Billing,
 // Events or Network key degrades it instead.
 const assert = require('assert');
 const nodeHttp = require('http');
@@ -21,13 +22,17 @@ function get(base, p, headers = {}) {
         assert.strictEqual(r.status, 200, r.text);
         assert.strictEqual(r.json.status, 'ready');
         assert.strictEqual(r.json.service, 'tips');
-        assert.deepStrictEqual(Object.keys(r.json.checks), ['db', 'network_jwks', 'billing', 'events']);
+        assert.deepStrictEqual(Object.keys(r.json.checks), ['db', 'valkey', 'network_jwks', 'billing', 'events']);
         for (const [name, c] of Object.entries(r.json.checks)) {
-            assert.strictEqual(c.status, 'ok', `${name}: ${c.error}`);
+            // Without Valkey: skipped with its reason, never claimed "ok"; with it, a real PING.
+            if (name === 'valkey' && !t.valkey) { assert.strictEqual(c.status, 'skipped', JSON.stringify(c)); assert.match(c.reason, /VALKEY_URL unset/); assert.deepStrictEqual(r.json.skipped, ['valkey']); }
+            else assert.strictEqual(c.status, 'ok', `${name}: ${c.error}`);
             assert.strictEqual(c.required, name === 'db', name);
             assert.strictEqual(typeof c.latency_ms, 'number');
             assert.ok(Date.parse(c.checked_at));
         }
+        assert.strictEqual(r.json.checks.db.detail.store, t.store.store, 'the store that answered, from a real round trip');
+        assert.ok(r.json.checks.db.detail.pool && typeof r.json.checks.db.detail.pool.total === 'number');
         assert.ok(r.json.events_outbox && r.json.pending_deliveries);
         assert.strictEqual(r.headers.get('cache-control'), 'no-store');
     });
@@ -80,7 +85,7 @@ function get(base, p, headers = {}) {
 
     await check('a broken database makes the service unready (503); /metrics still answers', async () => {
         const d = await boot();
-        d.db.close();
+        await d.db.close();
         const r = await d.call('GET', '/api/ready', { token: null });
         assert.strictEqual(r.status, 503, r.text);
         assert.strictEqual(r.json.ready, false);

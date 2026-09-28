@@ -25,9 +25,9 @@ const INVISIBLE = /[­​-‏‪-‮⁠-⁤⁦-⁩﻿]/g;
 const COMBINING_RUN = /(\p{M}{2})\p{M}+/gu;
 const URL_RE = /\b(?:https?:\/\/|www\.)[^\s<>"']+/gi;
 
-/** Invisible characters and combining-mark runs out, NFKC. */
+/** Invisible and NUL characters and combining-mark runs out, unpaired surrogates replaced, NFKC. */
 function clean(s) {
-    return String(s == null ? '' : s).replace(INVISIBLE, '').normalize('NFKC').replace(COMBINING_RUN, '$1');
+    return String(s == null ? '' : s).toWellFormed().replace(INVISIBLE, '').replace(/\u0000/g, '').normalize('NFKC').replace(COMBINING_RUN, '$1');
 }
 
 /** The creator's input (a list, or text with one entry per line or comma) → a clean, bounded list. */

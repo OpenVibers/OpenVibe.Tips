@@ -24,8 +24,8 @@ const { boot, check, done } = require('./helpers/app');
         assert.strictEqual(d.job.test, false);
         const grant = t.network.grants.find((g) => g.audience === 'openvibe.live');
         assert.strictEqual(grant.scope, 'live.tips_delivery.write');
-        const e = t.db.prepare("SELECT * FROM interaction_effects WHERE interaction_id = ? AND effect = 'chat_line'").get(r.json.interaction.id);
-        assert.deepStrictEqual(JSON.parse(e.result).ref, { chat_message_id: 1 });
+        const e = await t.db.maybe("SELECT * FROM interaction_effects WHERE interaction_id = $1 AND effect = 'chat_line'", [r.json.interaction.id]);
+        assert.deepStrictEqual(e.result.ref, { chat_message_id: 1 }, 'jsonb comes back parsed');
     });
 
     await check('TTS goes out as its own effect with the text and voice', async () => {
@@ -41,17 +41,17 @@ const { boot, check, done } = require('./helpers/app');
         const r = await t.call('POST', '/api/v1/checkout', { user: viewer, body: { creator: 'alex', amount: 7 } });
         const id = r.json.interaction.id;
         await domain.effects.drain();
-        let e = t.db.prepare("SELECT * FROM interaction_effects WHERE interaction_id = ? AND effect = 'chat_line'").get(id);
+        let e = await t.db.maybe("SELECT * FROM interaction_effects WHERE interaction_id = $1 AND effect = 'chat_line'", [id]);
         assert.strictEqual(e.state, 'queued');
         assert.match(e.last_error, /Live 503/);
-        assert.strictEqual(domain.interactions.get(id).payment_state, 'settled');
+        assert.strictEqual((await domain.interactions.get(t.db, id)).payment_state, 'settled');
         live.state.fail = null;
         t.clock.offset += 5000;
         await domain.effects.drain();
         t.clock.offset = 0;
-        e = t.db.prepare("SELECT * FROM interaction_effects WHERE interaction_id = ? AND effect = 'chat_line'").get(id);
+        e = await t.db.maybe("SELECT * FROM interaction_effects WHERE interaction_id = $1 AND effect = 'chat_line'", [id]);
         assert.strictEqual(e.state, 'delivered');
-        assert.strictEqual(domain.interactions.get(id).delivery_state, 'delivered');
+        assert.strictEqual((await domain.interactions.get(t.db, id)).delivery_state, 'delivered');
     });
 
     await check('Live refuses (422): the effect fails at once, tips.interaction.failed, payment untouched', async () => {
@@ -60,17 +60,17 @@ const { boot, check, done } = require('./helpers/app');
         const id = r.json.interaction.id;
         await domain.effects.drain();
         live.state.fail = null;
-        const i = domain.interactions.get(id);
+        const i = await domain.interactions.get(t.db, id);
         assert.strictEqual(i.delivery_state, 'failed');
         assert.strictEqual(i.payment_state, 'settled');
-        assert.strictEqual(billing.payable.get(t.domain.profiles.byHandle('alex').creator_subject) >= 8, true);
-        assert.strictEqual(t.outboxRows('tips.interaction.failed').filter((ev) => ev.subject.id === id).length, 1);
+        assert.strictEqual(billing.payable.get((await t.domain.profiles.byHandle(t.db, 'alex')).creator_subject) >= 8, true);
+        assert.strictEqual((await t.outboxRows('tips.interaction.failed')).filter((ev) => ev.subject.id === id).length, 1);
     });
 
     await check('simulations never reach Live: their chat effects stay in the test adapter', async () => {
-        const alex = t.domain.profiles.byHandle('alex');
+        const alex = await t.domain.profiles.byHandle(t.db, 'alex');
         const before = live.deliveries.length;
-        const sim = domain.interactions.simulate(alex, { kind: 'tip', amount: 100 }, { by: alex.creator_subject });
+        const sim = await domain.interactions.simulate(alex, { kind: 'tip', amount: 100 }, { by: alex.creator_subject });
         await domain.effects.drain();
         assert.strictEqual(live.deliveries.length, before);
         assert.ok(t.adapters.test.jobs.some((j) => j.interaction.id === sim.id && j.test));

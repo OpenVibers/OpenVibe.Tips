@@ -12,11 +12,15 @@
  *
  * With --billing-db the report ends with the reconciliation: per creator, Tips' settled total must
  * equal Billing's; the exit code is 1 when it does not. Safe to re-run.
+ *
+ * Tips' side is its PostgreSQL database (DATABASE_URL; migrations applied with DATABASE_DIRECT_URL
+ * first). The two snapshots are other services' SQLite files, which is why this operator tool, and
+ * scripts/migrate-to-postgres.js, are the only code here that loads better-sqlite3.
  */
 const path = require('path');
 const Database = require('better-sqlite3');
 const { loadConfig } = require('../server/config');
-const { openDb } = require('../server/db');
+const { openDb, migrate } = require('../server/db');
 const { createIdentity } = require('../server/network');
 const { createTipsOutbox } = require('../server/events/outbox');
 const { createDomain } = require('../server/domain');
@@ -30,10 +34,11 @@ async function main() {
     const livePath = opt('live-db');
     if (!livePath) { console.error('usage: import-live.js --live-db <snapshot> [--billing-db <snapshot>] [--dry-run] [--json]'); process.exit(2); }
     const config = loadConfig();
-    for (const p of [livePath, opt('billing-db')].filter(Boolean)) if (path.resolve(p) === path.resolve(config.dbPath)) throw new Error(`${p} is the Tips database`);
+    for (const p of [livePath, opt('billing-db')].filter(Boolean)) if (path.resolve(p) === path.resolve(config.sqlitePath)) throw new Error(`${p} is Tips' own (pre-PostgreSQL) database`);
     const live = new Database(livePath, { readonly: true, fileMustExist: true });
     const bdb = opt('billing-db') ? new Database(opt('billing-db'), { readonly: true, fileMustExist: true }) : null;
-    const db = openDb(config.dbPath);
+    const db = openDb(config);
+    await migrate(config, { serving: db });
     const outbox = createTipsOutbox({ db, config });
     const domain = createDomain({ db, config, outbox, billing: null, adapters: {}, log: console });
     const identity = createIdentity(config);
@@ -55,7 +60,7 @@ async function main() {
     }
     live.close();
     if (bdb) bdb.close();
-    db.close();
+    await db.close();
     if (report.reconciliation && !report.reconciliation.ok) process.exit(1);
 }
 

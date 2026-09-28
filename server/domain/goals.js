@@ -16,75 +16,97 @@
  * when goal_supporters is on, each supporter's own privacy applying (an anonymous one reads
  * "Anonymous", a hidden amount is left out).
  */
+const { sql } = require('openvibe-sdk/db');
 const { fail, iso, prefixedId, text, positiveInt } = require('../util');
 const { safeUrl } = require('./profiles');
-const { publicName, shownName } = require('./privacy');
+const { publicName, shownName, publicView } = require('./privacy');
 
 function createGoals(ctx) {
     const { db } = ctx;
 
-    const get = (id) => db.prepare('SELECT * FROM tip_goals WHERE id = ?').get(String(id || '')) || null;
-    /** Settled contributions, plus the opening amount a goal imported from Live carried over. */
-    const totalOf = (goalId) => {
-        const r = db.prepare('SELECT COALESCE(SUM(amount - reversed_amount), 0) AS n, COUNT(*) AS c FROM tip_goal_contributions WHERE goal_id = ?').get(goalId);
-        const g = db.prepare('SELECT opening_amount FROM tip_goals WHERE id = ?').get(goalId);
-        return { n: r.n + ((g && g.opening_amount) || 0), c: r.c, contributions: r.n, opening: (g && g.opening_amount) || 0 };
-    };
+    const get = (q, id) => q.maybe(sql`SELECT * FROM tip_goals WHERE id = ${String(id || '')}`);
 
-    function list(creator, { status } = {}) {
-        const rows = status
-            ? db.prepare('SELECT * FROM tip_goals WHERE creator_subject = ? AND status = ? ORDER BY sort_order, created_at').all(creator, status)
-            : db.prepare("SELECT * FROM tip_goals WHERE creator_subject = ? ORDER BY status = 'active' DESC, sort_order, created_at DESC").all(creator);
-        return rows;
+    /** Settled contributions per goal, in one query: Map(goal id → { n: sum, c: count }). */
+    async function totalsOf(q, goalIds) {
+        const out = new Map(goalIds.map((id) => [id, { n: 0, c: 0 }]));
+        if (!goalIds.length) return out;
+        const rows = await q.many(sql`SELECT goal_id, COALESCE(SUM(amount - reversed_amount), 0)::bigint AS n, count(*) AS c
+            FROM tip_goal_contributions WHERE goal_id = ANY(${goalIds}) GROUP BY goal_id`);
+        for (const r of rows) out.set(r.goal_id, { n: r.n, c: r.c });
+        return out;
     }
 
-    function present(g, { contributions = false } = {}) {
+    function list(q, creator, { status } = {}) {
+        return status
+            ? q.many(sql`SELECT * FROM tip_goals WHERE creator_subject = ${creator} AND status = ${status} ORDER BY sort_order, created_at`)
+            : q.many(sql`SELECT * FROM tip_goals WHERE creator_subject = ${creator} ORDER BY status = 'active' DESC, sort_order, created_at DESC`);
+    }
+
+    /** The full view of each goal (the creator's, granted services', overlays'): one query for all totals. */
+    async function presentMany(q, goals) {
+        const totals = await totalsOf(q, goals.map((g) => g.id));
+        return goals.map((g) => {
+            const t = totals.get(g.id);
+            const n = t.n + (g.opening_amount || 0);
+            return {
+                id: g.id, creator: { type: 'user', id: g.creator_subject }, title: g.title, description: g.description || null,
+                target_amount: g.target_amount, current_amount: n, currency: g.currency, supporters_count: t.c,
+                carried_over_amount: g.opening_amount || 0,
+                percent: Math.min(100, Math.floor((n * 100) / g.target_amount)), reached: !!g.reached_at, reached_at: g.reached_at || null,
+                image_url: g.image_url || null, status: g.status, sort_order: g.sort_order, revision: g.revision,
+                created_at: g.created_at, updated_at: g.updated_at, closed_at: g.closed_at || null,
+            };
+        });
+    }
+
+    async function present(q, g, { contributions = false } = {}) {
         if (!g) return null;
-        const t = totalOf(g.id);
-        const out = {
-            id: g.id, creator: { type: 'user', id: g.creator_subject }, title: g.title, description: g.description || null,
-            target_amount: g.target_amount, current_amount: t.n, currency: g.currency, supporters_count: t.c,
-            carried_over_amount: t.opening,
-            percent: Math.min(100, Math.floor((t.n * 100) / g.target_amount)), reached: !!g.reached_at, reached_at: g.reached_at || null,
-            image_url: g.image_url || null, status: g.status, sort_order: g.sort_order, revision: g.revision,
-            created_at: g.created_at, updated_at: g.updated_at, closed_at: g.closed_at || null,
-        };
+        const [out] = await presentMany(q, [g]);
         if (contributions) {
             // The creator's view: amounts always (their money), names as the supporter allowed.
-            out.contributions = db.prepare(`SELECT c.interaction_id, c.amount, c.reversed_amount, c.created_at, i.supporter_name, i.anonymous, i.erased_at
-                FROM tip_goal_contributions c JOIN tip_interactions i ON i.id = c.interaction_id WHERE c.goal_id = ? ORDER BY c.id DESC LIMIT 200`).all(g.id)
+            out.contributions = (await q.many(sql`SELECT c.interaction_id, c.amount, c.reversed_amount, c.created_at, i.supporter_name, i.anonymous, i.erased_at
+                FROM tip_goal_contributions c JOIN tip_interactions i ON i.id = c.interaction_id WHERE c.goal_id = ${g.id} ORDER BY c.id DESC LIMIT 200`))
                 .map(({ anonymous, erased_at: erasedAt, ...c }) => ({ ...c, supporter_name: publicName({ ...c, anonymous, erased_at: erasedAt }) }));
         }
         return out;
     }
 
-    /** The public shape of a goal under the creator's page settings (`page`, profiles.js). */
-    function publicGoal(g, page) {
-        const out = present(g);
-        if (!out) return null;
-        if (!page.goal_amounts) Object.assign(out, { target_amount: null, current_amount: null, carried_over_amount: null, amounts_hidden: true });
-        if (page.goal_supporters) {
+    /**
+     * The public shape of goals under the creator's page settings (`profile.page`, profiles.js), with
+     * the creator's word filter (`profile.filter`) on supporter names: totals in one query, and the
+     * latest supporters of every goal in one more when the page shows them.
+     */
+    async function publicGoals(q, goals, profile) {
+        const page = profile.page;
+        const views = await presentMany(q, goals);
+        if (!page.goal_amounts) for (const v of views) Object.assign(v, { target_amount: null, current_amount: null, carried_over_amount: null, amounts_hidden: true });
+        if (page.goal_supporters && goals.length) {
             // Moderated (held or hidden) interactions are left out; names go through the creator's filter.
-            const settings = ctx.profiles.filterOf(g.creator_subject);
-            out.supporters = db.prepare(`SELECT c.amount - c.reversed_amount AS amount, c.created_at, i.supporter_name, i.anonymous, i.hide_amount, i.erased_at
-                FROM tip_goal_contributions c JOIN tip_interactions i ON i.id = c.interaction_id WHERE c.goal_id = ? AND c.amount > c.reversed_amount
-                AND i.moderation = 'visible' ORDER BY c.id DESC LIMIT 10`).all(g.id)
-                .map((c) => ({ name: shownName(c, settings), amount: page.goal_amounts && !c.hide_amount ? c.amount : null, at: c.created_at }));
+            const rows = await q.many(sql`SELECT gid AS goal_id, s.amount, s.created_at, s.supporter_name, s.anonymous, s.hide_amount, s.erased_at
+                FROM unnest(${goals.map((g) => g.id)}::text[]) AS gid
+                CROSS JOIN LATERAL (
+                    SELECT c.amount - c.reversed_amount AS amount, c.created_at, i.supporter_name, i.anonymous, i.hide_amount, i.erased_at
+                      FROM tip_goal_contributions c JOIN tip_interactions i ON i.id = c.interaction_id
+                     WHERE c.goal_id = gid AND c.amount > c.reversed_amount AND i.moderation = 'visible'
+                     ORDER BY c.id DESC LIMIT 10) s`);
+            for (const v of views) {
+                v.supporters = rows.filter((r) => r.goal_id === v.id)
+                    .map((c) => ({ name: shownName(c, profile.filter), amount: page.goal_amounts && !c.hide_amount ? c.amount : null, at: c.created_at }));
+            }
         }
-        return out;
+        return views;
     }
+    const publicGoal = async (q, g, profile) => (g ? (await publicGoals(q, [g], profile))[0] : null);
 
     /** Inside a transaction: bump revision, emit the event, queue the overlay delivery. */
-    function changed(goalId, reason, { interactionId = null, by = null } = {}) {
-        const at = iso(ctx.now());
-        db.prepare('UPDATE tip_goals SET revision = revision + 1, updated_at = ? WHERE id = ?').run(at, goalId);
-        const g = get(goalId);
-        const view = present(g);
-        ctx.outbox.emit('tips.goal.updated', { type: 'goal', id: g.id, revision: g.revision }, {
+    async function changed(t, goalId, reason, { interactionId = null, by = null } = {}) {
+        const g = await t.one(sql`UPDATE tip_goals SET revision = revision + 1, updated_at = ${iso(ctx.now())} WHERE id = ${goalId} RETURNING *`);
+        const [view] = await presentMany(t, [g]);
+        await ctx.outbox.emit(t, 'tips.goal.updated', { type: 'goal', id: g.id, revision: g.revision }, {
             goal_id: g.id, creator: view.creator, title: g.title, target_amount: g.target_amount, current_amount: view.current_amount,
             currency: g.currency, status: g.status, reached: view.reached, reason, interaction_id: interactionId,
         });
-        ctx.overlays.addGoalDelivery(g.creator_subject, view, { reason, interactionId, by, dedupe: `goal:${g.id}:r${g.revision}` });
+        await ctx.overlays.addGoalDelivery(t, g.creator_subject, view, { reason, interactionId, by, dedupe: `goal:${g.id}:r${g.revision}` });
         return view;
     }
 
@@ -109,88 +131,103 @@ function createGoals(ctx) {
         return out;
     }
 
-    function create(creator, input = {}) {
+    async function create(creator, input = {}) {
         const f = fields(input, false);
-        const count = db.prepare("SELECT COUNT(*) AS n FROM tip_goals WHERE creator_subject = ? AND status = 'active'").get(creator).n;
-        if (count >= 20) fail(409, 'tips.too_many_goals', 'close a goal before adding another (20 active at most)');
-        return ctx.tx(() => {
+        return ctx.tx(async (t) => {
+            await ctx.lockCreator(t, creator);
+            const count = await t.value(sql`SELECT count(*) FROM tip_goals WHERE creator_subject = ${creator} AND status = 'active'`);
+            if (count >= 20) fail(409, 'tips.too_many_goals', 'close a goal before adding another (20 active at most)');
             const at = iso(ctx.now());
             const id = prefixedId('tgoal', ctx.now());
-            db.prepare(`INSERT INTO tip_goals (id, creator_subject, title, description, target_amount, image_url, status, sort_order, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)`).run(id, creator, f.title, f.description || null, f.target_amount, f.image_url || null, f.sort_order || 0, at, at);
-            return changed(id, 'created');
+            await t.exec(sql`INSERT INTO tip_goals (id, creator_subject, title, description, target_amount, image_url, status, sort_order, created_at, updated_at)
+                VALUES (${id}, ${creator}, ${f.title}, ${f.description || null}, ${f.target_amount}, ${f.image_url || null}, 'active', ${f.sort_order || 0}, ${at}, ${at})`);
+            return changed(t, id, 'created');
         });
     }
 
-    function update(goal, input = {}) {
+    /** An edit by the creator. The goal is locked, and its revision checked against the locked row. */
+    async function update(goal, input = {}) {
         if (goal.status !== 'active') fail(409, 'tips.goal_closed', 'a closed goal cannot be edited');
         if (input.revision != null && Number(input.revision) !== goal.revision) fail(409, 'tips.revision_conflict', `the goal is at revision ${goal.revision}`);
         const f = fields(input, true);
-        const keys = Object.keys(f);
-        if (!keys.length) return present(goal);
-        return ctx.tx(() => {
-            db.prepare(`UPDATE tip_goals SET ${keys.map((k) => `${k} = @${k}`).join(', ')} WHERE id = @id`).run({ ...f, id: goal.id });
-            markReached(goal.id);
-            return changed(goal.id, 'updated');
+        if (!Object.keys(f).length) return present(db, goal);
+        return ctx.tx(async (t) => {
+            const cur = await t.one(sql`SELECT * FROM tip_goals WHERE id = ${goal.id} FOR UPDATE`);
+            if (cur.status !== 'active') fail(409, 'tips.goal_closed', 'a closed goal cannot be edited');
+            if (input.revision != null && Number(input.revision) !== cur.revision) fail(409, 'tips.revision_conflict', `the goal is at revision ${cur.revision}`);
+            await t.exec(sql`UPDATE tip_goals SET ${sql.set(f)} WHERE id = ${goal.id}`);
+            await markReached(t, goal.id);
+            return changed(t, goal.id, 'updated');
         });
     }
 
-    function close(goal) {
-        if (goal.status === 'closed') return present(goal);
-        return ctx.tx(() => {
-            db.prepare("UPDATE tip_goals SET status = 'closed', closed_at = ? WHERE id = ?").run(iso(ctx.now()), goal.id);
-            return changed(goal.id, 'closed');
+    async function close(goal) {
+        if (goal.status === 'closed') return present(db, goal);
+        return ctx.tx(async (t) => {
+            const n = await t.exec(sql`UPDATE tip_goals SET status = 'closed', closed_at = ${iso(ctx.now())} WHERE id = ${goal.id} AND status = 'active'`);
+            if (!n) return present(t, await get(t, goal.id));
+            return changed(t, goal.id, 'closed');
         });
     }
 
-    function markReached(goalId) {
-        const g = get(goalId);
-        const reached = totalOf(goalId).n >= g.target_amount;
-        if (reached && !g.reached_at) { db.prepare('UPDATE tip_goals SET reached_at = ? WHERE id = ?').run(iso(ctx.now()), goalId); return true; }
-        if (!reached && g.reached_at) db.prepare('UPDATE tip_goals SET reached_at = NULL WHERE id = ?').run(goalId);
+    /** Inside a transaction: set or clear reached_at from the goal's total. True when reached just now. */
+    async function markReached(t, goalId) {
+        const g = await t.one(sql`SELECT g.target_amount, g.reached_at,
+                g.opening_amount + COALESCE((SELECT SUM(c.amount - c.reversed_amount) FROM tip_goal_contributions c WHERE c.goal_id = g.id), 0)::bigint AS total
+            FROM tip_goals g WHERE g.id = ${goalId}`);
+        const reached = g.total >= g.target_amount;
+        if (reached && !g.reached_at) { await t.exec(sql`UPDATE tip_goals SET reached_at = ${iso(ctx.now())} WHERE id = ${goalId}`); return true; }
+        if (!reached && g.reached_at) await t.exec(sql`UPDATE tip_goals SET reached_at = NULL WHERE id = ${goalId}`);
         return false;
     }
 
     /** The goal an interaction counts toward, or null. */
-    function pick(creator, requestedGoalId) {
+    async function pick(q, creator, requestedGoalId) {
         if (requestedGoalId) {
-            const g = get(requestedGoalId);
+            const g = await get(q, requestedGoalId);
             if (g && g.creator_subject === creator && g.status === 'active') return g;
         }
-        const active = db.prepare("SELECT * FROM tip_goals WHERE creator_subject = ? AND status = 'active' LIMIT 2").all(creator);
+        const active = await q.many(sql`SELECT * FROM tip_goals WHERE creator_subject = ${creator} AND status = 'active' LIMIT 2`);
         return active.length === 1 ? active[0] : null;
     }
 
-    /** Inside the settlement transaction. Simulations never get here. */
-    function contribute(interaction, requestedGoalId) {
-        const g = pick(interaction.creator_subject, requestedGoalId);
-        if (!g) return null;
+    /**
+     * Inside the settlement transaction (the interaction row is locked already; the goal is locked
+     * next, keeping the lock order). Simulations never get here. `filter`: the creator's word filter.
+     */
+    async function contribute(t, interaction, requestedGoalId, filter) {
+        const picked = await pick(t, interaction.creator_subject, requestedGoalId);
+        if (!picked) return null;
+        const g = await t.one(sql`SELECT id, status FROM tip_goals WHERE id = ${picked.id} FOR UPDATE`);
+        if (g.status !== 'active') return null;
         const at = iso(ctx.now());
-        const r = db.prepare(`INSERT OR IGNORE INTO tip_goal_contributions (goal_id, interaction_id, amount, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`)
-            .run(g.id, interaction.id, interaction.amount, at, at);
-        if (!r.changes) return null;
-        const reachedNow = markReached(g.id);
+        const n = await t.exec(sql`INSERT INTO tip_goal_contributions (goal_id, interaction_id, amount, created_at, updated_at)
+            VALUES (${g.id}, ${interaction.id}, ${interaction.amount}, ${at}, ${at}) ON CONFLICT DO NOTHING`);
+        if (!n) return null;
+        const reachedNow = await markReached(t, g.id);
         // The overlay's goal update names the supporter as the alert does; not when the amount is hidden
         // (the bar's jump would otherwise pin the amount on them), nor while moderation holds it.
-        const by = interaction.hide_amount || (interaction.moderation && interaction.moderation !== 'visible') ? null : ctx.view(interaction).supporter_name;
-        return changed(g.id, reachedNow ? 'reached' : 'contribution', { interactionId: interaction.id, by });
+        const by = interaction.hide_amount || (interaction.moderation && interaction.moderation !== 'visible') ? null : publicView(interaction, { filter }).supporter_name;
+        return changed(t, g.id, reachedNow ? 'reached' : 'contribution', { interactionId: interaction.id, by });
     }
 
     /** Inside the reversal transaction: take `bits` back off every goal the interaction counted toward. */
-    function reverse(interaction, bits) {
-        const rows = db.prepare('SELECT * FROM tip_goal_contributions WHERE interaction_id = ?').all(interaction.id);
+    async function reverse(t, interaction, bits) {
+        const rows = await t.many(sql`SELECT * FROM tip_goal_contributions WHERE interaction_id = ${interaction.id} ORDER BY goal_id`);
+        if (!rows.length) return [];
+        await t.many(sql`SELECT id FROM tip_goals WHERE id = ANY(${rows.map((c) => c.goal_id)}) ORDER BY id FOR UPDATE`);
         const out = [];
         for (const c of rows) {
             const take = Math.min(bits, c.amount - c.reversed_amount);
             if (take <= 0) continue;
-            db.prepare('UPDATE tip_goal_contributions SET reversed_amount = reversed_amount + ?, updated_at = ? WHERE id = ?').run(take, iso(ctx.now()), c.id);
-            markReached(c.goal_id);
-            out.push(changed(c.goal_id, 'reversal', { interactionId: interaction.id }));
+            await t.exec(sql`UPDATE tip_goal_contributions SET reversed_amount = reversed_amount + ${take}, updated_at = ${iso(ctx.now())} WHERE id = ${c.id}`);
+            await markReached(t, c.goal_id);
+            out.push(await changed(t, c.goal_id, 'reversal', { interactionId: interaction.id }));
         }
         return out;
     }
 
-    return { get, list, present, publicGoal, create, update, close, contribute, reverse, pick, totalOf };
+    return { get, list, present, presentMany, publicGoal, publicGoals, create, update, close, contribute, reverse, pick, totalsOf };
 }
 
 module.exports = { createGoals };

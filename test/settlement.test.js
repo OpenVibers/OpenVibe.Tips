@@ -38,21 +38,21 @@ const { boot, check, done } = require('./helpers/app');
         // Same transaction republished under a new event id (a replay): still one interaction.
         const c = await t.deliver({ ...ev, event_id: billing.envelope('x', {}, 'x').event_id });
         assert.strictEqual(c.json.duplicate, false);
-        assert.strictEqual(t.db.prepare('SELECT COUNT(*) AS n FROM tip_interactions WHERE billing_txn_id = ?').get(ev.payload.transaction_id).n, 1);
-        assert.strictEqual(t.db.prepare('SELECT COUNT(*) AS n FROM tip_interactions').get().n, 1);
+        assert.strictEqual(await t.db.value('SELECT count(*) FROM tip_interactions WHERE billing_txn_id = $1', [ev.payload.transaction_id]), 1);
+        assert.strictEqual(await t.db.value('SELECT count(*) FROM tip_interactions'), 1);
     });
 
     await check('a duplicate provider webhook (Billing settles once) → one logical interaction for a donation Tips did not start', async () => {
         // Billing turned one PowerChat site-routed tip into one transaction; Events may deliver it more than once.
         const ev = billing.foreignDonation({ from: null, to: alex.subject, amount: 300, provider: 'powerchat', message: 'from PowerChat' });
         for (let k = 0; k < 3; k++) await t.deliver(k === 2 ? { ...ev, event_id: billing.envelope('x', {}, 'x').event_id } : ev);
-        const rows = t.db.prepare('SELECT * FROM tip_interactions WHERE billing_txn_id = ?').all(ev.payload.transaction_id);
+        const rows = await t.db.many('SELECT * FROM tip_interactions WHERE billing_txn_id = $1', [ev.payload.transaction_id]);
         assert.strictEqual(rows.length, 1);
         assert.strictEqual(rows[0].origin, 'billing');
         assert.strictEqual(rows[0].funding, 'provider');
         assert.strictEqual(rows[0].payment_state, 'settled');
         // Tips did not start it, so Tips does not announce it in chat a second time — overlay only.
-        const effects = t.db.prepare('SELECT effect FROM interaction_effects WHERE interaction_id = ?').all(rows[0].id).map((e) => e.effect);
+        const effects = (await t.db.many('SELECT effect FROM interaction_effects WHERE interaction_id = $1', [rows[0].id])).map((e) => e.effect);
         assert.deepStrictEqual(effects, ['overlay_alert']);
         assert.strictEqual(rows[0].delivery_state, 'delivered');
     });
@@ -60,16 +60,16 @@ const { boot, check, done } = require('./helpers/app');
     await check('delivery runs after settlement; a delivery failure never touches payment state', async () => {
         const test = t.adapters.test;
         await domain.effects.drain();           // the first tip delivers normally
-        assert.strictEqual(domain.interactions.get(tipId).delivery_state, 'delivered');
+        assert.strictEqual((await domain.interactions.get(t.db, tipId)).delivery_state, 'delivered');
         test.state.failWith = 'chat is down';
         test.state.permanent = true;
         const r = await t.call('POST', '/api/v1/checkout', { user: viewer, body: { creator: alex.subject, amount: 40 } });
         const id = r.json.interaction.id;
         await domain.effects.drain();
-        const i = domain.interactions.get(id);
+        const i = await domain.interactions.get(t.db, id);
         assert.strictEqual(i.payment_state, 'settled');
         assert.strictEqual(i.delivery_state, 'failed');
-        assert.strictEqual(t.outboxRows('tips.interaction.failed').filter((e) => e.subject.id === id).length, 1);
+        assert.strictEqual((await t.outboxRows('tips.interaction.failed')).filter((e) => e.subject.id === id).length, 1);
         test.state.failWith = null;
         assert.strictEqual(test.jobs.find((j) => j.interaction.id === tipId).text, 'Viewer tipped 250 Vibes: great stream');
     });
@@ -80,13 +80,13 @@ const { boot, check, done } = require('./helpers/app');
         const r = await t.call('POST', '/api/v1/checkout', { user: viewer, body: { creator: alex.subject, amount: 10 } });
         const id = r.json.interaction.id;
         await domain.effects.drain();
-        const e = t.db.prepare("SELECT * FROM interaction_effects WHERE interaction_id = ? AND effect = 'chat_line'").get(id);
+        const e = await t.db.maybe("SELECT * FROM interaction_effects WHERE interaction_id = $1 AND effect = 'chat_line'", [id]);
         assert.strictEqual(e.state, 'queued');
         assert.strictEqual(e.attempts, 1);
         test.state.failWith = null;
         t.clock.offset += 60_000;
         await domain.effects.drain();
-        assert.strictEqual(domain.interactions.get(id).delivery_state, 'delivered');
+        assert.strictEqual((await domain.interactions.get(t.db, id)).delivery_state, 'delivered');
         t.clock.offset = 0;
     });
 
@@ -96,21 +96,21 @@ const { boot, check, done } = require('./helpers/app');
         const r = await t.call('POST', '/api/v1/checkout', { user: viewer, body: { creator: 'alex', amount: 400 } });
         const id = r.json.interaction.id;
         await domain.effects.drain();
-        assert.strictEqual(domain.interactions.get(id).delivery_state, 'delivered');
-        assert.strictEqual(domain.goals.present(domain.goals.get(g.json.goal.id)).current_amount, 400);
+        assert.strictEqual((await domain.interactions.get(t.db, id)).delivery_state, 'delivered');
+        assert.strictEqual((await domain.goals.present(t.db, await domain.goals.get(t.db, g.json.goal.id))).current_amount, 400);
         const rev = billing.refund(r.json.interaction.payment.billing_txn_id);
         const d = await t.deliver(rev);
         assert.strictEqual(d.json.outcome, 'reversed');
-        const i = domain.interactions.get(id);
+        const i = await domain.interactions.get(t.db, id);
         assert.strictEqual(i.payment_state, 'reversed');
         assert.strictEqual(i.delivery_state, 'delivered');
         assert.strictEqual(i.reversed_bits, 400);
-        assert.ok(t.db.prepare("SELECT COUNT(*) AS n FROM interaction_effects WHERE interaction_id = ? AND state = 'delivered'").get(id).n >= 2);
-        assert.strictEqual(domain.goals.present(domain.goals.get(g.json.goal.id)).current_amount, 0);
+        assert.ok(await t.db.value("SELECT count(*) FROM interaction_effects WHERE interaction_id = $1 AND state = 'delivered'", [id]) >= 2);
+        assert.strictEqual((await domain.goals.present(t.db, await domain.goals.get(t.db, g.json.goal.id))).current_amount, 0);
         // The same reversal again changes nothing.
         const again = await t.deliver({ ...rev, event_id: billing.envelope('x', {}, 'x').event_id });
         assert.strictEqual(again.json.outcome, 'duplicate_reversal');
-        assert.strictEqual(domain.interactions.get(id).reversed_bits, 400);
+        assert.strictEqual((await domain.interactions.get(t.db, id)).reversed_bits, 400);
         await t.call('POST', `/api/v1/goals/${g.json.goal.id}/close`, { user: alex });
     });
 
@@ -118,12 +118,12 @@ const { boot, check, done } = require('./helpers/app');
         const r = await t.call('POST', '/api/v1/checkout', { user: viewer, body: { creator: 'alex', amount: 20 } });
         const id = r.json.interaction.id;
         await t.deliver(billing.refund(r.json.interaction.payment.billing_txn_id));
-        const i = domain.interactions.get(id);
+        const i = await domain.interactions.get(t.db, id);
         assert.strictEqual(i.payment_state, 'reversed');
         assert.strictEqual(i.delivery_state, 'cancelled');
         await domain.effects.drain();
         assert.ok(!t.adapters.test.jobs.some((j) => j.interaction.id === id), 'nothing delivered after the reversal');
-        assert.strictEqual(t.outboxRows('tips.interaction.cancelled').filter((e) => e.subject.id === id).length, 1);
+        assert.strictEqual((await t.outboxRows('tips.interaction.cancelled')).filter((e) => e.subject.id === id).length, 1);
     });
 
     await check('insufficient credit: payment failed, nothing delivered, a replay of the key answers the same', async () => {
@@ -134,7 +134,7 @@ const { boot, check, done } = require('./helpers/app');
         assert.strictEqual(r.json.details.interaction.payment.state, 'failed');
         const again = await t.call('POST', '/api/v1/checkout', { user: poor, body: { creator: 'alex', amount: 50 }, key: 'poor-key-00001' });
         assert.strictEqual(again.status, 409);
-        assert.strictEqual(t.db.prepare('SELECT COUNT(*) AS n FROM tip_interactions WHERE supporter_subject = ?').get(poor.subject).n, 1);
+        assert.strictEqual(await t.db.value('SELECT count(*) FROM tip_interactions WHERE supporter_subject = $1', [poor.subject]), 1);
     });
 
     await check('self-tipping is refused by subject', async () => {
@@ -151,18 +151,18 @@ const { boot, check, done } = require('./helpers/app');
         assert.match(r.json.checkout_url, /^https:\/\/checkout\.stripe\.test\/pi_/);
         const id = r.json.interaction.id;
         assert.strictEqual(r.json.interaction.payment.state, 'pending');
-        assert.strictEqual(domain.goals.present(domain.goals.get(g.json.goal.id)).current_amount, 0, 'pending never counts');
-        const intentId = domain.interactions.get(id).billing_intent_id;
+        assert.strictEqual((await domain.goals.present(t.db, await domain.goals.get(t.db, g.json.goal.id))).current_amount, 0, 'pending never counts');
+        const intentId = (await domain.interactions.get(t.db, id)).billing_intent_id;
         assert.strictEqual(billing.calls.find((c) => c.url === '/api/v1/intents' && c.body.subject.id === buyer.subject).key, `tips:intent:${id}`);
         const purchase = billing.settlePurchase(intentId);
         const d = await t.deliver(purchase);
         assert.strictEqual(d.json.outcome, 'funded');
         await new Promise((ok) => setTimeout(ok, 100));
         await domain.interactions.processDueTransfers();
-        const i = domain.interactions.get(id);
+        const i = await domain.interactions.get(t.db, id);
         assert.strictEqual(i.payment_state, 'settled');
         assert.strictEqual(i.funding_txn_id, purchase.payload.transaction_id);
-        assert.strictEqual(domain.goals.present(domain.goals.get(g.json.goal.id)).current_amount, 300);
+        assert.strictEqual((await domain.goals.present(t.db, await domain.goals.get(t.db, g.json.goal.id))).current_amount, 300);
         // The purchase event again, and the transfer's own event: nothing new.
         assert.strictEqual((await t.deliver(purchase)).json.duplicate, true);
         const own = billing.events.find((e) => e.payload.metadata && e.payload.metadata.target && e.payload.metadata.target.id === id);
@@ -188,7 +188,7 @@ const { boot, check, done } = require('./helpers/app');
         t.clock.offset += 5000;
         await domain.interactions.processDueTransfers();
         t.clock.offset = 0;
-        assert.strictEqual(domain.interactions.get(id).payment_state, 'settled');
+        assert.strictEqual((await domain.interactions.get(t.db, id)).payment_state, 'settled');
     });
 
     await check('paid messages, TTS and media requests exist only after settlement', async () => {
@@ -205,17 +205,17 @@ const { boot, check, done } = require('./helpers/app');
             assert.strictEqual(r.status, 201, r.text);
             ids.push(r.json.interaction.id);
         }
-        const count = () => t.db.prepare('SELECT (SELECT COUNT(*) FROM paid_messages WHERE interaction_id IN (?, ?, ?)) + (SELECT COUNT(*) FROM paid_media_requests WHERE interaction_id IN (?, ?, ?)) AS n').get(...ids, ...ids).n;
-        assert.strictEqual(count(), 0);
-        for (const id of ids) await t.deliver(billing.settlePurchase(domain.interactions.get(id).billing_intent_id));
+        const count = () => t.db.value('SELECT (SELECT count(*) FROM paid_messages WHERE interaction_id = ANY($1)) + (SELECT count(*) FROM paid_media_requests WHERE interaction_id = ANY($1))', [ids]);
+        assert.strictEqual(await count(), 0);
+        for (const id of ids) await t.deliver(billing.settlePurchase((await domain.interactions.get(t.db, id)).billing_intent_id));
         await new Promise((ok) => setTimeout(ok, 100));
         await domain.interactions.processDueTransfers();
-        assert.strictEqual(count(), 3);
-        const pm = t.db.prepare('SELECT * FROM paid_messages WHERE interaction_id = ?').get(ids[0]);
+        assert.strictEqual(await count(), 3);
+        const pm = await t.db.maybe('SELECT * FROM paid_messages WHERE interaction_id = $1', [ids[0]]);
         assert.strictEqual(pm.highlight_seconds, 60);
         await domain.effects.drain();
-        assert.strictEqual(t.db.prepare('SELECT status FROM paid_messages WHERE interaction_id = ?').get(ids[1]).status, 'delivered');
-        assert.strictEqual(t.db.prepare('SELECT status FROM paid_media_requests WHERE interaction_id = ?').get(ids[2]).status, 'accepted');
+        assert.strictEqual((await t.db.maybe('SELECT status FROM paid_messages WHERE interaction_id = $1', [ids[1]])).status, 'delivered');
+        assert.strictEqual((await t.db.maybe('SELECT status FROM paid_media_requests WHERE interaction_id = $1', [ids[2]])).status, 'accepted');
         const tts = t.adapters.test.jobs.find((j) => j.effect === 'tts' && j.interaction.id === ids[1]);
         assert.deepStrictEqual(tts.tts, { text: 'read me please', voice: 'amy' });
     });
@@ -230,7 +230,7 @@ const { boot, check, done } = require('./helpers/app');
         assert.strictEqual(a.json.interaction.id, b.json.interaction.id);
         const denied = await t.call('POST', '/api/v1/interactions/external', { cap: ['tips.checkout.create'], body: { ...body, provider_ref: 'x2' } });
         assert.strictEqual(denied.status, 403);
-        const totals = domain.interactions.totals(alex.subject);
+        const totals = await domain.interactions.totals(t.db, alex.subject);
         assert.strictEqual(totals.external, 500);
     });
 
@@ -246,7 +246,7 @@ const { boot, check, done } = require('./helpers/app');
         assert.strictEqual(proxied.status, 404);
         const forged = await t.deliver({ ...ev, source: 'live' });
         assert.strictEqual(forged.json.outcome, 'ignored:source');
-        assert.strictEqual(t.db.prepare('SELECT COUNT(*) AS n FROM tip_interactions WHERE billing_txn_id = ?').get(ev.payload.transaction_id).n, 0);
+        assert.strictEqual(await t.db.value('SELECT count(*) FROM tip_interactions WHERE billing_txn_id = $1', [ev.payload.transaction_id]), 0);
     });
 
     await check('events: ready/goal events are relayed to OpenVibe.Events with the tips service token', async () => {

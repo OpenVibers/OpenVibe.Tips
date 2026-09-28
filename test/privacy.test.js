@@ -28,7 +28,7 @@ function payloadValidator(type) {
     const tip = (user, body) => t.call('POST', '/api/v1/checkout', { user, body: { creator: 'alex', ...body } });
     const alertOf = async (id) => (await t.call('GET', `/overlay/${secret}/state`, { token: null })).json.alerts.find((a) => a.interaction_id === id);
     const jobsOf = (id) => t.adapters.test.jobs.filter((j) => j.interaction.id === id);
-    const eventsOf = (type, id) => t.outboxRows(type).filter((e) => e.subject.id === id);
+    const eventsOf = async (type, id) => (await t.outboxRows(type)).filter((e) => e.subject.id === id);
 
     let anonId;
     await check('anonymous: "Anonymous" to the creator, overlays, chat and events; the supporter keeps their receipt', async () => {
@@ -46,19 +46,19 @@ function payloadValidator(type) {
         assert.strictEqual(a.data.supporter_name, 'Anonymous');
         assert.strictEqual(a.data.message, 'from nobody');
         assert.ok(!JSON.stringify(a.data).includes('Viewer Real Name') && !JSON.stringify(a.data).includes(viewer.subject));
-        const g = t.db.prepare("SELECT payload FROM overlay_deliveries WHERE kind = 'goal' AND interaction_id = ?").get(anonId);
-        assert.strictEqual(JSON.parse(g.payload).by, 'Anonymous');
+        const g = await t.db.maybe("SELECT payload FROM overlay_deliveries WHERE kind = 'goal' AND interaction_id = $1", [anonId]);
+        assert.strictEqual(g.payload.by, 'Anonymous');
 
         await domain.effects.drain();
         const [job] = jobsOf(anonId);
         assert.deepStrictEqual(job.supporter, { name: 'Anonymous', subject: null });
         assert.strictEqual(job.text, 'Anonymous tipped 120 Vibes: from nobody');
 
-        const [ready] = eventsOf('tips.interaction.ready', anonId);
+        const [ready] = await eventsOf('tips.interaction.ready', anonId);
         assert.strictEqual(ready.payload.supporter, null);
         assert.strictEqual(ready.payload.supporter_name, 'Anonymous');
         assert.ok(contracts.validate('tips.interaction.ready', ready.payload).valid);
-        assert.ok(!JSON.stringify(t.outboxRows()).includes('Viewer Real Name'), 'no event anywhere carries the name');
+        assert.ok(!JSON.stringify(await t.outboxRows()).includes('Viewer Real Name'), 'no event anywhere carries the name');
 
         for (const as of [{ user: alex }, { cap: ['tips.interaction.get'] }]) {
             const v = (await t.call('GET', `/api/v1/interactions/${anonId}`, as)).json.interaction;
@@ -80,7 +80,7 @@ function payloadValidator(type) {
         assert.strictEqual(a.amount, null);
         assert.strictEqual(a.amount_hidden, true);
         assert.strictEqual(a.supporter_name, 'Viewer');
-        assert.strictEqual(JSON.parse(t.db.prepare("SELECT payload FROM overlay_deliveries WHERE kind = 'goal' AND interaction_id = ?").get(hiddenId).payload).by, null,
+        assert.strictEqual((await t.db.maybe("SELECT payload FROM overlay_deliveries WHERE kind = 'goal' AND interaction_id = $1", [hiddenId])).payload.by, null,
             'the goal update does not pin the jump on them');
         await domain.effects.drain();
         const [job] = jobsOf(hiddenId);
@@ -88,7 +88,7 @@ function payloadValidator(type) {
         assert.strictEqual(job.interaction.amount, null);
         assert.strictEqual(job.privacy.hide_amount, true);
         assert.strictEqual((await t.call('GET', `/api/v1/interactions/${hiddenId}`, { user: alex })).json.interaction.amount, 222);
-        assert.strictEqual(eventsOf('tips.interaction.ready', hiddenId)[0].payload.amount, 222);
+        assert.strictEqual((await eventsOf('tips.interaction.ready', hiddenId))[0].payload.amount, 222);
     });
 
     await check('an overlay\'s minimum still applies to a hidden amount (without revealing it)', async () => {
@@ -183,10 +183,10 @@ function payloadValidator(type) {
             body: new URLSearchParams({ csrf, idem: 'form-privacy-00001', kind: 'tip', amount: '15', message: 'shh', pay_with: 'credit', supporter_name: 'Other', anonymous: '1', private_message: '1' }).toString(),
         });
         assert.strictEqual(res.status, 303);
-        const i = domain.interactions.get(res.headers.get('location').split('/').pop());
-        assert.strictEqual(i.anonymous, 1);
-        assert.strictEqual(i.private_message, 1);
-        assert.strictEqual(i.hide_amount, 0);
+        const i = await domain.interactions.get(t.db, res.headers.get('location').split('/').pop());
+        assert.strictEqual(i.anonymous, true);
+        assert.strictEqual(i.private_message, true);
+        assert.strictEqual(i.hide_amount, false);
     });
 
     await check('export: a supporter downloads their own tips, with messages and choices, nobody else\'s', async () => {
@@ -207,14 +207,15 @@ function payloadValidator(type) {
     });
 
     await check('erasure: the person goes, the money record stays; tips.interaction.erased redacts the earlier events', async () => {
-        const totalsBefore = domain.interactions.totals(alex.subject);
-        const goalBefore = domain.goals.present(domain.goals.get(goal.id)).current_amount;
+        const totalsBefore = await domain.interactions.totals(t.db, alex.subject);
+        const goalNow = async () => (await domain.goals.present(t.db, await domain.goals.get(t.db, goal.id))).current_amount;
+        const goalBefore = await goalNow();
         const buyer = t.network.newUser('buyer');
         billing.fund(buyer.subject, 1000);
         const kept = await tip(buyer, { amount: 150, pay_with: 'checkout', provider: 'stripe', message: 'pending one' });
         const done1 = await tip(buyer, { amount: 40, message: 'my secret words', supporter_name: 'Buyer Person' });
-        assert.ok(t.db.prepare('SELECT COUNT(*) AS n FROM api_idempotency WHERE key LIKE ?').get(`${buyer.subject}:%`).n >= 2);
-        const unsent = eventsOf('tips.interaction.ready', done1.json.interaction.id)[0];
+        assert.ok(await t.db.value('SELECT count(*) FROM api_idempotency WHERE key LIKE $1', [`${buyer.subject}:%`]) >= 2);
+        const unsent = (await eventsOf('tips.interaction.ready', done1.json.interaction.id))[0];
         assert.strictEqual(unsent.payload.supporter.id, buyer.subject);
 
         const r = await t.call('POST', '/api/v1/me/erase', { user: buyer });
@@ -223,36 +224,36 @@ function payloadValidator(type) {
         assert.strictEqual(r.json.kept_pending, 1);
         assert.ok(r.json.stored_answers_removed >= 2);
 
-        const i = domain.interactions.get(done1.json.interaction.id);
+        const i = await domain.interactions.get(t.db, done1.json.interaction.id);
         assert.strictEqual(i.supporter_subject, null);
         assert.strictEqual(i.supporter_name, null);
         assert.strictEqual(i.message, null);
         assert.ok(i.erased_at);
         assert.strictEqual(i.amount, 40);
         assert.ok(i.billing_txn_id, 'the Billing reference stays');
-        assert.strictEqual(domain.interactions.get(kept.json.interaction.id).supporter_subject, buyer.subject, 'a pending payment keeps its supporter');
+        assert.strictEqual((await domain.interactions.get(t.db, kept.json.interaction.id)).supporter_subject, buyer.subject, 'a pending payment keeps its supporter');
         const a = await alertOf(i.id);
         assert.strictEqual(a.supporter_name, 'Anonymous');
         assert.strictEqual(a.message, null);
-        const row = t.db.prepare('SELECT * FROM tip_interactions WHERE id = ?').get(i.id);
+        const row = await t.db.maybe('SELECT * FROM tip_interactions WHERE id = $1', [i.id]);
         assert.ok(!JSON.stringify(row).includes('my secret words') && !JSON.stringify(row).includes('Buyer Person') && !JSON.stringify(row).includes(buyer.subject));
-        const everything = JSON.stringify(t.db.prepare('SELECT * FROM paid_messages').all()) + JSON.stringify(t.db.prepare('SELECT payload FROM overlay_deliveries').all())
-            + JSON.stringify(t.db.prepare('SELECT * FROM api_idempotency').all());
+        const everything = JSON.stringify(await t.db.many('SELECT * FROM paid_messages')) + JSON.stringify(await t.db.many('SELECT payload FROM overlay_deliveries'))
+            + JSON.stringify(await t.db.many('SELECT * FROM api_idempotency'));
         assert.ok(!everything.includes('my secret words') && !everything.includes('Buyer Person'));
-        const scrubbed = eventsOf('tips.interaction.ready', i.id)[0];
+        const scrubbed = (await eventsOf('tips.interaction.ready', i.id))[0];
         assert.strictEqual(scrubbed.payload.supporter, null, 'the local outbox copy no longer names them');
         assert.strictEqual(scrubbed.payload.supporter_name, 'Anonymous');
 
-        const [erased] = eventsOf('tips.interaction.erased', i.id);
+        const [erased] = await eventsOf('tips.interaction.erased', i.id);
         assert.deepStrictEqual(erased.payload.redacts, { subject_type: 'interaction', subject_ids: [i.id] });
         const v = payloadValidator('tips.interaction.erased')(erased.payload);
         assert.ok(v.valid, JSON.stringify(v.errors));
         assert.ok(contracts.validate('events.event-envelope@1', erased).valid);
 
-        const totalsAfter = domain.interactions.totals(alex.subject);
+        const totalsAfter = await domain.interactions.totals(t.db, alex.subject);
         assert.strictEqual(totalsAfter.settled_via_billing, totalsBefore.settled_via_billing + 40, 'the erased tip still counts');
         assert.strictEqual(totalsAfter.settled_via_billing, billing.payable.get(alex.subject), 'still reconciles to Billing');
-        assert.strictEqual(domain.goals.present(domain.goals.get(goal.id)).current_amount, goalBefore + 40, 'the goal keeps the money');
+        assert.strictEqual(await goalNow(), goalBefore + 40, 'the goal keeps the money');
         const receipts = (await t.call('GET', '/api/v1/interactions', { user: buyer })).json.interactions;
         assert.deepStrictEqual(receipts.map((x) => x.id), [kept.json.interaction.id]);
     });
@@ -265,17 +266,17 @@ function payloadValidator(type) {
         const post = (form) => fetch(`${t.base}/receipts/erase`, { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: cookie }, body: new URLSearchParams(form).toString() });
         assert.strictEqual((await post({ csrf, idem: 'form-erase-000001' })).status, 403, 'no confirmation');
         assert.strictEqual((await post({ csrf: 'forged', idem: 'form-erase-000002', confirm: '1' })).status, 403);
-        assert.ok(t.db.prepare('SELECT COUNT(*) AS n FROM tip_interactions WHERE supporter_subject = ?').get(other.subject).n > 0);
+        assert.ok(await t.db.value('SELECT count(*) FROM tip_interactions WHERE supporter_subject = $1', [other.subject]) > 0);
         const ok = await post({ csrf, idem: 'form-erase-000003', confirm: '1' });
         assert.strictEqual(ok.status, 303);
         assert.match(ok.headers.get('location'), /^\/receipts\?done=/);
-        assert.strictEqual(t.db.prepare('SELECT COUNT(*) AS n FROM tip_interactions WHERE supporter_subject = ?').get(other.subject).n, 0);
+        assert.strictEqual(await t.db.value('SELECT count(*) FROM tip_interactions WHERE supporter_subject = $1', [other.subject]), 0);
         const lb = (await t.call('GET', '/api/v1/profiles/alex/supporters', { token: null })).json.leaderboard;
         assert.ok(!lb.some((x) => x.name === 'Other'), 'an erased supporter leaves the leaderboard');
     });
 
     await check('every event is a valid envelope with a valid payload', async () => {
-        for (const e of t.outboxRows()) {
+        for (const e of await t.outboxRows()) {
             assert.ok(contracts.validate('events.event-envelope@1', e).valid, e.event_type);
             const v = payloadValidator(e.event_type)(e.payload);
             assert.ok(v.valid, `${e.event_type}: ${JSON.stringify(v.errors)}`);

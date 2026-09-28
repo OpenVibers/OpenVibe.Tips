@@ -30,13 +30,13 @@ const { boot, check, done } = require('./helpers/app');
             assert.strictEqual(d.status, 200);
             assert.strictEqual(d.json.outcome, 'recorded', 'recorded on its own');
         }
-        const i = domain.interactions.get(id);
+        const i = await domain.interactions.get(t.db, id);
         assert.strictEqual(i.payment_state, 'pending', 'the paid message is still unpaid');
-        assert.strictEqual(t.db.prepare('SELECT COUNT(*) AS n FROM paid_messages WHERE interaction_id = ?').get(id).n, 0);
-        const spoof = domain.interactions.byBillingTxn(cases[0].payload.transaction_id);
+        assert.strictEqual(await t.db.value('SELECT count(*) FROM paid_messages WHERE interaction_id = $1', [id]), 0);
+        const spoof = await domain.interactions.byBillingTxn(t.db, cases[0].payload.transaction_id);
         assert.strictEqual(spoof.amount, 1);
         assert.strictEqual(spoof.origin, 'billing');
-        assert.strictEqual(domain.interactions.totals(alex.subject).settled_via_billing, billing.payable.get(alex.subject), 'still reconciles to Billing');
+        assert.strictEqual((await domain.interactions.totals(t.db, alex.subject)).settled_via_billing, billing.payable.get(alex.subject), 'still reconciles to Billing');
     });
 
     await check('overlay stream floods: a token opens a bounded number of streams at once', async () => {
@@ -83,13 +83,31 @@ const { boot, check, done } = require('./helpers/app');
             tts: { text: '<speak><break time="9s"/>hello⁦ world</speak>' },
         } });
         assert.strictEqual(r.status, 201, r.text);
-        const i = domain.interactions.get(r.json.interaction.id);
+        const i = await domain.interactions.get(t.db, r.json.interaction.id);
         assert.strictEqual(i.supporter_name, 'Viewer');
         assert.strictEqual(i.message, 'hi there');
         await domain.effects.drain();
         const job = t.adapters.test.jobs.find((j) => j.interaction.id === i.id && j.effect === 'tts');
         assert.ok(!/[<>]/.test(job.tts.text), job.tts.text);
         assert.ok(!/[⁦‮​]/.test(JSON.stringify(job)));
+    });
+
+    await check('text PostgreSQL cannot store (NUL, an unpaired surrogate) is cleaned, from people and from Billing events alike', async () => {
+        const r = await t.call('POST', '/api/v1/checkout', { user: viewer, body: { creator: 'alex', amount: 6, message: 'a\u0000b \ud83d', supporter_name: 'N\u0000ul' } });
+        assert.strictEqual(r.status, 201, r.text);
+        const i = await domain.interactions.get(t.db, r.json.interaction.id);
+        assert.deepStrictEqual([i.message, i.supporter_name], ['ab �', 'Nul']);
+        const tts = await t.call('POST', '/api/v1/tts-requests', { user: viewer, body: { creator: 'alex', amount: 150, tts: { text: 'say \udc00 this\u0000' } } });
+        assert.strictEqual(tts.status, 201, tts.text);
+        const cfg = await t.call('POST', '/api/v1/overlay-configs', { user: alex, body: { kind: 'alerts', template: '{name} \ud800 tipped' } });
+        assert.strictEqual(cfg.status, 201, cfg.text);
+        // A Billing event is redelivered until it is accepted: its text must never make it unstorable.
+        const ev = billing.foreignDonation({ from: other.subject, to: alex.subject, amount: 9, message: 'from\u0000 billing \ud83d' });
+        const d = await t.deliver(ev);
+        assert.deepStrictEqual([d.status, d.json.outcome], [200, 'recorded']);
+        assert.strictEqual((await domain.interactions.byBillingTxn(t.db, ev.payload.transaction_id)).message, 'from billing �');
+        const cursor = Buffer.from(JSON.stringify(['1', 'x'])).toString('base64url');
+        assert.strictEqual((await t.call('GET', `/api/v1/interactions?cursor=${cursor}`, { user: viewer })).status, 422, 'a cursor PostgreSQL could not read is refused, not a 500');
     });
 
     await check('an overlay secret is shown once: an Idempotency-Key replay does not return it, the database never holds it', async () => {
@@ -99,7 +117,7 @@ const { boot, check, done } = require('./helpers/app');
         assert.strictEqual(replay.headers.get('idempotent-replayed'), 'true');
         assert.strictEqual(replay.json.token.id, first.json.token.id);
         assert.strictEqual(replay.json.secret, null);
-        const everything = JSON.stringify(t.db.prepare('SELECT * FROM api_idempotency').all()) + JSON.stringify(t.db.prepare('SELECT * FROM overlay_tokens').all());
+        const everything = JSON.stringify(await t.db.many('SELECT * FROM api_idempotency')) + JSON.stringify(await t.db.many('SELECT * FROM overlay_tokens'));
         assert.ok(!everything.includes(first.json.secret));
     });
 

@@ -1,8 +1,13 @@
 'use strict';
 /**
- * Boots Tips against the stubs on a random port with a temp database. Jobs are off: tests drive the
+ * Boots Tips against the stubs on a random port with a migrated database of its own (helpers/db.js:
+ * PGlite, or the containers with opts.store 'pg' / TIPS_TEST_STORE=pg). Jobs are off: tests drive the
  * effects worker and transfer retries explicitly (domain.effects.drain(), processDueTransfers()).
- * opts.env overrides the environment; opts.appOpts is passed to createApp (e.g. limitsNow).
+ * opts.env overrides the environment; opts.appOpts is passed to createApp (e.g. limitsNow);
+ * opts.valkey an openvibe-sdk/valkey handle (default: the containers' Valkey with TIPS_TEST_STORE=pg,
+ * else none: everything shared stays in the process);
+ * opts.db an existing handle (a second process on the same database); opts.share another instance
+ * whose stubs (Network, Billing, Events, Live) this one uses.
  *
  *   t.call(method, path, { body, user, cap, sub, key })   user: a stub user → Bearer user JWT;
  *                                                          otherwise a service token with `cap`
@@ -16,18 +21,20 @@ const http = require('http');
 const crypto = require('crypto');
 const { signDelivery, signDeliveryHeaders } = require('openvibe-sdk/events');
 const { startNetwork, startBilling, startEvents, startLive } = require('./stubs');
+const { testDb, testValkey } = require('./db');
 
 const EVENTS_SECRET = 'e'.repeat(48);
 
 async function boot(opts = {}) {
-    const network = await startNetwork();
-    const billing = await startBilling(network);
-    const events = await startEvents();
-    const live = opts.live ? await startLive(network) : null;
+    // opts.share: another booted instance whose stubs this one uses (a second process of one service).
+    const shared = opts.share || null;
+    const network = shared ? shared.network : await startNetwork();
+    const billing = shared ? shared.billing : await startBilling(network);
+    const events = shared ? shared.events : await startEvents();
+    const live = shared ? shared.live : (opts.live ? await startLive(network) : null);
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tips-test-'));
     const env = {
         NODE_ENV: 'test',
-        TIPS_DB_PATH: path.join(dir, 'tips.db'),
         BASE_URL: 'http://tips.test',
         OV_NETWORK_URL: network.url,
         OV_NETWORK_INTERNAL_URL: network.url,
@@ -53,7 +60,10 @@ async function boot(opts = {}) {
     const clock = { offset: 0 };
     const logs = [];
     const log = { log: (...a) => logs.push(a.join(' ')), warn: (...a) => logs.push(a.join(' ')), error: (...a) => logs.push(a.join(' ')) };
-    const app = createApp({ config, now: () => Date.now() + clock.offset, log, ...(opts.appOpts || {}) });
+    const store = opts.db ? { db: opts.db, store: opts.db.store, close: async () => {} } : await testDb({ store: opts.store });
+    const ownValkey = opts.valkey === undefined && process.env.TIPS_TEST_STORE === 'pg' ? testValkey() : null;
+    const valkey = opts.valkey || ownValkey;
+    const app = createApp({ config, db: store.db, valkey, now: () => Date.now() + clock.offset, log, ...(opts.appOpts || {}) });
     await app.locals.keys.load();
     const server = await new Promise((resolve) => { const s = http.createServer(app); s.listen(0, '127.0.0.1', () => resolve(s)); });
     const base = `http://127.0.0.1:${server.address().port}`;
@@ -135,17 +145,20 @@ async function boot(opts = {}) {
         return u;
     }
 
-    const outboxRows = (type) => domain.db.prepare('SELECT envelope FROM event_outbox ORDER BY id').all().map((r) => JSON.parse(r.envelope)).filter((e) => !type || e.event_type === type);
+    /** The events in the outbox (envelopes, oldest first), of one type or all. */
+    const outboxRows = async (type) => (await domain.db.many('SELECT envelope FROM tips_event_outbox ORDER BY id')).map((r) => r.envelope).filter((e) => !type || e.event_type === type);
 
     return {
-        app, base, call, deliver, sse, creator, domain, db: domain.db, config, clock, network, billing, events, live, logs, dir, outboxRows,
+        app, base, call, deliver, sse, creator, domain, db: domain.db, store, valkey, config, clock, network, billing, events, live, logs, dir, outboxRows,
         adapters: app.locals.adapters,
         close: async () => {
-            domain.overlays.closeAll();
+            await domain.overlays.close();
+            server.closeAllConnections();
             await new Promise((r) => server.close(r));
             await app.locals.outbox.stop();
-            await Promise.all([network.close(), billing.close(), events.close(), live && live.close()]);
-            try { domain.db.close(); } catch { /* */ }
+            if (!shared) await Promise.all([network.close(), billing.close(), events.close(), live && live.close()]);
+            await store.close();
+            if (ownValkey) await ownValkey.close();
             fs.rmSync(dir, { recursive: true, force: true });
         },
     };

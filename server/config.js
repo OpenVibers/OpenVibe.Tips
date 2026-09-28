@@ -8,6 +8,7 @@
  * never prices or rates. Prices and the value of a bit are Billing's.
  */
 require('dotenv').config();
+const crypto = require('crypto');
 
 const int = (v, d) => { const n = parseInt(v, 10); return Number.isFinite(n) ? n : d; };
 const bool = (v, d = false) => (v == null || v === '' ? d : ['1', 'true', 'yes', 'on'].includes(String(v).toLowerCase()));
@@ -28,7 +29,23 @@ function loadConfig(env = process.env) {
         host: env.HOST || '127.0.0.1',
         baseUrl,
         trustProxy: env.TRUST_PROXY != null ? Number(env.TRUST_PROXY) : 1,
-        dbPath: env.TIPS_DB_PATH || './data/tips.db',
+
+        // PostgreSQL (ADR-035; OpenVibe.Host's data role writes all four into /etc/openvibe/tips.env):
+        // DATABASE_URL is the pooled runtime role through PgBouncer (transaction mode), DATABASE_DIRECT_URL
+        // the owner role on a direct connection, for migrations at boot and the one-time import.
+        db: {
+            url: env.DATABASE_URL || '',
+            directUrl: env.DATABASE_DIRECT_URL || '',
+        },
+        // Valkey: shared, never authoritative (per-actor limit counters, overlay fan-out between
+        // processes, overlay stream slots). Unset: all of it stays in this process (one process only).
+        valkey: {
+            url: env.VALKEY_URL || '',
+            prefix: env.VALKEY_PREFIX || 'ov:tips:',
+        },
+        // The SQLite file of the release before PostgreSQL: read (never written) only by
+        // scripts/migrate-to-postgres.js. The systemd unit sets /var/lib/openvibe-tips/tips.db.
+        sqlitePath: env.TIPS_DB_PATH || './data/tips.db',
 
         // Identity: service tokens and user tokens are RS256 JWTs signed by OpenVibe.Network.
         network: {
@@ -48,8 +65,11 @@ function loadConfig(env = process.env) {
             scope: env.OV_OAUTH_SCOPE || 'profile',
         },
         cookies: { secure: env.COOKIE_SECURE != null ? bool(env.COOKIE_SECURE) : isProduction },
-        // Signs the anti-forgery tokens of the server-rendered forms.
-        formSecret: env.TIPS_FORM_SECRET || '',
+        // Signs the anti-forgery tokens of the server-rendered forms. Every process must use the same
+        // one (a form rendered by one process is posted to another), so without TIPS_FORM_SECRET it is
+        // derived from the client secret; only with neither is it per process (development).
+        formSecret: env.TIPS_FORM_SECRET
+            || (env.OV_OAUTH_CLIENT_SECRET ? crypto.createHmac('sha256', env.OV_OAUTH_CLIENT_SECRET).update('openvibe.tips form secret').digest('hex') : ''),
 
         billing: {
             url: trim(env.BILLING_URL || 'http://127.0.0.1:4600'),

@@ -11,12 +11,16 @@
  *   /overlay/:token[/events|/state]  overlays (scoped revocable tokens)
  *   /, /dashboard, /receipts, /:handle …  server-rendered pages
  *
- * createApp({ config, db, keys, billing, adapters, now, fetchImpl, log }) — everything injectable.
+ * createApp({ config, db, valkey, registry, keys, billing, adapters, now, fetchImpl, log }) — everything injectable.
+ * `db` is an openvibe-sdk/db handle with the schema migrated (server/index.js migrates at boot; tests
+ * pass a PGlite one); `valkey` an openvibe-sdk/valkey handle or null (everything shared stays in this
+ * process).
  */
 const path = require('path');
 const express = require('express');
 const cookieParser = require('cookie-parser');
 const { http } = require('openvibe-contracts');
+const { isLoopbackDirect } = require('openvibe-shared/metrics');
 const { loadConfig } = require('./config');
 const { openDb } = require('./db');
 const { createKeyProvider, createUserAuth } = require('./network');
@@ -32,6 +36,7 @@ const { createSessionRoutes } = require('./web/session');
 const { createWebRoutes } = require('./web/routes');
 const { createLayout, assetVersion } = require('./web/layout');
 const pages = require('./web/pages');
+const { inputError } = require('./util');
 const { createTipsReadiness, registerTipsGauges } = require('./observability');
 
 const VERSION = require('../package.json').version;
@@ -39,7 +44,8 @@ const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 
 function createApp(opts = {}) {
     const config = opts.config || loadConfig();
-    const db = opts.db || openDb(config.dbPath);
+    const db = opts.db || openDb(config);
+    const valkey = opts.valkey || null;
     const fetchImpl = opts.fetchImpl || globalThis.fetch;
     const log = opts.log || console;
     const now = opts.now || (() => Date.now());
@@ -48,7 +54,7 @@ function createApp(opts = {}) {
     const billing = opts.billing || createBillingClient(config, { fetchImpl });
     const adapters = opts.adapters || createAdapters(config, { fetchImpl });
     const outbox = opts.outbox || createTipsOutbox({ db, config, fetchImpl: opts.eventsFetch, now, log });
-    const domain = createDomain({ db, config, outbox, billing, adapters, now, log });
+    const domain = createDomain({ db, config, outbox, billing, adapters, valkey, now, log });
     const apiAuth = createApiAuth({ config, keys, userAuth });
     const release = require('openvibe-shared/release').createRelease({ service: 'tips', root: path.join(__dirname, '..') });
     const layout = createLayout({ config, release });
@@ -58,10 +64,13 @@ function createApp(opts = {}) {
     app.set('trust proxy', config.trustProxy);
     // HTTP golden signals by route template, process metrics, release_info; GET /metrics answers
     // direct loopback callers only (Track O). An overlay's SSE stream is a session, not a request.
+    // The Tips gauges are read from the database just before a direct scrape renders (one query).
+    const registry = opts.registry || require('openvibe-shared/metrics').createRegistry();
+    const gauges = registerTipsGauges(registry, { db, now, log });
+    app.get('/metrics', (req, res, next) => (isLoopbackDirect(req) ? gauges.refresh().then(() => next(), () => next()) : next()));
     const metrics = require('openvibe-shared/metrics').instrument(app, {
-        service: 'tips', release: release.release, skip: (req) => /^\/overlay\/[^/]+\/events$/.test(req.path),
+        service: 'tips', release: release.release, registry, skip: (req) => /^\/overlay\/[^/]+\/events$/.test(req.path),
     });
-    registerTipsGauges(metrics.registry, { db, outbox, now });
     app.use(http.middleware());
     app.use((req, res, next) => {
         res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -77,12 +86,12 @@ function createApp(opts = {}) {
     });
     app.use(cookieParser());
 
-    app.get('/api/health', (req, res) => res.json({
-        ok: true, service: 'tips', version: VERSION, chat_adapter: config.chat.adapter, events: outbox.status(),
-    }));
-    // Readiness (openvibe-shared/ready): 503 only when the database fails; Network key, Billing and
-    // Events are optional and degrade it (see observability.js).
-    const readiness = createTipsReadiness({ db, keys, config, outbox, release: release.release, fetchImpl });
+    app.get('/api/health', (req, res, next) => outbox.status().then((events) => res.json({
+        ok: true, service: 'tips', version: VERSION, chat_adapter: config.chat.adapter, events,
+    }), next));
+    // Readiness (openvibe-shared/ready): 503 only when the database fails; Valkey, the Network key,
+    // Billing and Events are optional and degrade it (see observability.js).
+    const readiness = createTipsReadiness({ db, valkey, keys, config, outbox, release: release.release, fetchImpl });
     app.get('/api/ready', readiness.handler);
     // GET /release.json (ADR-016) and POST /release-metrics: open tabs' update reports into /metrics.
     release.mount(app, { registry: metrics.registry });
@@ -94,7 +103,7 @@ function createApp(opts = {}) {
         ? http.sendProblem(res, 404, 'not_found', { ctx: req.ov }) : next()), consumer.router);
     // Per-actor limits on /api/v1 (api/actor-limits.js), counted once apiAuth resolved the caller.
     // opts.limitsNow: the limiter's clock (tests).
-    const limits = createActorLimits({ config, now: opts.limitsNow || now, registry: metrics.registry, log });
+    const limits = createActorLimits({ config, valkey, now: opts.limitsNow || now, registry: metrics.registry, log });
     app.use('/api/v1', express.json({ limit: '64kb' }), (req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); }, apiAuth.middleware, v1Router({ domain, apiAuth, limits }));
     app.use('/auth', createSessionRoutes(config, userAuth, { fetchImpl }));
     { const legal = require('openvibe-shared/legal'); app.get(legal.PATHS, legal.handler({ id: 'tips', service: 'tips', host: 'openvibe.tips', name: 'OpenVibe.Tips', profile: 'ugc' })); }
@@ -119,13 +128,18 @@ function createApp(opts = {}) {
     app.use((err, req, res, next) => {
         if (err && err.type === 'entity.parse.failed') return http.sendProblem(res, 400, 'request.malformed_json', { ctx: req.ov });
         if (err && err.type === 'entity.too.large') return http.sendProblem(res, 413, 'request.too_large', { ctx: req.ov });
+        const refused = inputError(err);
+        if (refused && !res.headersSent) {
+            if (req.path.startsWith('/api/')) return http.sendProblem(res, 422, refused.code, { detail: refused.detail, ctx: req.ov });
+            return res.status(400).type('html').send(layout.page({ title: 'Not accepted', robots: 'noindex', body: pages.errorPage({ status: 400, title: 'That could not be saved', message: refused.detail }) }));
+        }
         log.error('[Tips] unhandled error:', err);
         if (res.headersSent) return undefined;
         if (req.path.startsWith('/api/')) return http.sendProblem(res, 500, 'tips.internal', { ctx: req.ov });
         return res.status(500).type('html').send(layout.page({ title: 'Error', robots: 'noindex', body: pages.errorPage({ status: 500, title: 'Something went wrong', message: 'This one is on us. Please try again.' }) }));
     });
 
-    Object.assign(app.locals, { config, db, domain, keys, outbox, adapters, billing, consumer, metrics });
+    Object.assign(app.locals, { config, db, valkey, domain, keys, outbox, adapters, billing, consumer, metrics });
     return app;
 }
 
