@@ -3,8 +3,8 @@
 > Creator support: tips, goals, paid messages, TTS and media requests, overlays.
 
 **Status:** alpha — runtime built and tested against stubs (roadmap Wave 9). Deployed internally, not
-launched: running on the host since 2026-09-23 on `127.0.0.1:4610` only, with an empty database and no
-public route. OpenVibe.Live remains where tips happen until the Billing cutover (see *What waits*).  
+launched: running on the host since 2026-09-23 on `127.0.0.1:4610` only, holding the Live import and no
+creator profile yet, with no public route. OpenVibe.Live remains where tips happen until the Billing cutover (see *What waits*).  
 **Domain:** `openvibe.tips` (keeps its OpenVibe.Sites placeholder until the launch rule below holds)  
 **Port / service id:** 4610 / `tips`  
 **Decision:** [ADR-012](https://github.com/OpenVibers/OpenVibe.Contracts/blob/main/docs/adr/ADR-012-economic-classification.md) — Tips never moves money; Billing does.  
@@ -41,8 +41,25 @@ from *interaction delivered*.
   (openvibe-sdk transactional outbox)
 - **OpenVibe.Network** — SSO for people, service tokens, JWKS, identity resolve (importer)
 - **OpenVibe.Live** — chat delivery through `/internal/tips/deliveries` (deployed in Live since `f11f809`; [docs/live-patch.diff](docs/live-patch.diff) is the original patch) until OpenVibe.Chat exposes paid messages; overlay consumer
-- **OpenVibe.Shared** v1.5.1 (app icon, SSR footer, noscript nav, release manifest, legal pages) and
-  the Network's `navbar.js`
+- **OpenVibe.Shared** v1.22.0 (app icon, SSR footer, noscript nav, release manifest, legal pages) and
+  the Network's `navbar.js`; **openvibe-contracts** v0.49.0 and **openvibe-sdk** v0.12.0 (service tokens,
+  outbox and inbox, per-actor limits), pinned by release tarball
+
+## Capabilities
+
+Implemented here (the service manifest's `capabilities`, 18 `tips.*` ids, audience `openvibe.tips`):
+`tips.profile.get|update`, `tips.checkout.create`, `tips.superchat.create`, `tips.tts.request`,
+`tips.media_request.create`, `tips.interaction.get|list|record|moderate`, `tips.goal.create|update|close`,
+`tips.overlay.token.create|revoke`, `tips.overlay.config.get|update` and `tips.simulation.run`.
+
+Called elsewhere, as the service principal `tips`:
+
+| Service | Grant | Why |
+|---|---|---|
+| OpenVibe.Billing | `billing.intent.create`, `billing.transfer.create` | checkout, and a tip from credit |
+| OpenVibe.Events | `events.event.publish`; `events.subscription.manage` once (`npm run subscribe`) | the outbox relay; the `billing.transaction.*` and `billing.receipt.*` subscriptions |
+| OpenVibe.Network | `identity.subject.resolve` | the Live importer's creator mapping |
+| OpenVibe.Live | `live.tips_delivery.write` (only with `TIPS_CHAT_ADAPTER=live-chat`) | chat lines and alerts through `/internal/tips/deliveries` |
 
 ## Run it
 
@@ -261,6 +278,14 @@ Signed-in forms carry an HMAC anti-forgery token and a per-render nonce. Shared 
 
 ## Security
 
+Reporting a vulnerability: [SECURITY.md](SECURITY.md). Tips never moves money (ADR-012): it holds
+references to Billing transaction ids, never a balance. People sign in with Network SSO; services use
+client-credentials tokens for audience `openvibe.tips`, one capability per route. Overlays use revocable
+scoped tokens, hashed at rest, never creator cookies. Billing's events arrive signed
+(`TIPS_EVENTS_SECRET`) through an inbox that dedupes them; `/internal/` and `/metrics` are never public.
+Tips calls only its configured Network, Billing, Events and Live hosts. Secrets (`OV_OAUTH_CLIENT_SECRET`,
+`TIPS_FORM_SECRET`, `TIPS_EVENTS_SECRET`) live in `/etc/openvibe/tips.env` (0600).
+
 [docs/threat-review.md](docs/threat-review.md) is the written threat review: overlays (tokenised URLs),
 paid-message abuse, TTS, amount spoofing, replay and privacy, with each finding's status and the test
 that shows it. The fixes it made:
@@ -342,6 +367,17 @@ a copy of Billing's database for the links and totals:
   offered in Tips yet; a refund made elsewhere arrives as `billing.transaction.reversed` and is applied.
 - Legal pages use the shared `ugc` profile, which does not describe payments.
 
+## Deploy
+
+Production deploys with `sudo ovhost deploy tips` on the host (strategy `git-checkout`: fetch,
+fast-forward `/opt/openvibe.tips`, install on a lockfile change, restart, wait for `/api/ready`).
+The unit is `openvibe-tips.service` on `127.0.0.1:4610`, the env file `/etc/openvibe/tips.env`. State lives in
+`/var/lib/openvibe-tips`. The vhost [deploy/nginx/openvibe.tips.conf](deploy/nginx/openvibe.tips.conf)
+waits for the launch: `openvibe.tips` serves the Sites placeholder.
+Rollback: ovhost puts the previous sha back by itself when `/api/ready` does not answer 2xx after the
+restart; afterwards `sudo ovhost rollback tips --to <sha>`. Nothing blocks a rollback: the schema
+code only adds tables and columns.
+
 ## Launch rule
 
 This repository does not make the product real, and the domain keeps its placeholder page on
@@ -356,9 +392,9 @@ exist here (plan §12.12):
    principal is provisioned on the host;
 3. server-rendered public routes useful without JavaScript — ✔;
 4. real persistence and end-to-end workflows — ✔ against stubs; not yet against the real Billing and
-   Events (Billing is in shadow and has sent no events; the production database is empty; the Live
-   import has not been run);
-5. capability and event registration against OpenVibe.Contracts — ✔ v0.15.0, payload schemas in v0.30.2 and v0.32.0 (v0.33.0 pinned);
+   Events (Billing is in shadow and has sent no events; production holds the Live import and no creator
+   profile);
+5. capability and event registration against OpenVibe.Contracts — ✔ v0.15.0, payload schemas in v0.30.2 and v0.32.0 (v0.49.0 pinned);
 6. a migration/seed strategy ✔, a written threat review ✔ ([docs/threat-review.md](docs/threat-review.md),
    internal; an independent review is still due), and sitemap/robots ✔ (no feed);
 7. acceptance tests proving the advertised functionality — ✔ (table above).
