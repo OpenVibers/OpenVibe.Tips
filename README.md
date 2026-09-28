@@ -41,7 +41,7 @@ from *interaction delivered*.
   (openvibe-sdk transactional outbox)
 - **OpenVibe.Network** — SSO for people, service tokens, JWKS, identity resolve (importer)
 - **OpenVibe.Live** — chat delivery through `/internal/tips/deliveries` (deployed in Live since `f11f809`; [docs/live-patch.diff](docs/live-patch.diff) is the original patch) until OpenVibe.Chat exposes paid messages; overlay consumer
-- **OpenVibe.Shared** v1.22.0 (app icon, SSR footer, noscript nav, release manifest, legal pages) and
+- **OpenVibe.Shared** v1.25.0 (app icon, SSR footer, noscript nav, release manifest, legal pages) and
   the Network's `navbar.js`; **openvibe-contracts** v0.49.0 and **openvibe-sdk** v0.12.0 (service tokens,
   outbox and inbox, per-actor limits), pinned by release tarball
 
