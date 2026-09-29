@@ -46,10 +46,11 @@ from *interaction delivered*.
   (openvibe-sdk transactional outbox)
 - **OpenVibe.Network** — SSO for people, service tokens, JWKS, identity resolve
 - **OpenVibe.Live** — chat delivery through `/internal/tips/deliveries` (deployed in Live since `f11f809`; [docs/live-patch.diff](docs/live-patch.diff) is the original patch) until OpenVibe.Chat exposes paid messages; overlay consumer
-- **OpenVibe.Shared** v1.25.0 (app icon, SSR footer, noscript nav, release manifest, legal pages) and
-  the Network's `navbar.js`; **openvibe-contracts** v0.76.0 and **openvibe-sdk** v0.18.0 (service tokens,
-  the async data layer `openvibe-sdk/db`, the PostgreSQL outbox and inbox, Valkey, pub/sub and the shared
-  limit store), pinned by release tarball; `pg` and `iovalkey` (drivers), PGlite for tests
+- **OpenVibe.Shared** v2.0.0 (app icon, SSR footer, noscript nav, release manifest, legal pages) and
+  the Network's `navbar.js`; **openvibe-contracts** v0.79.0 and **openvibe-sdk** v0.25.0 (service tokens,
+  the async data layer `openvibe-sdk/db`, the PostgreSQL outbox and inbox — the events outbox is the SDK's
+  `createServiceOutbox`, plan T1 — Valkey, pub/sub and the shared limit store), pinned by release tarball;
+  `pg` and `iovalkey` (drivers), PGlite for tests
 
 ## Capabilities
 
@@ -412,7 +413,7 @@ exist here (plan §12.12):
 3. server-rendered public routes useful without JavaScript — ✔;
 4. real persistence and end-to-end workflows — ✔ against stubs; not yet against the real Billing and
    Events (Billing is in shadow and has sent no events; production has no creator profile yet);
-5. capability and event registration against OpenVibe.Contracts — ✔ v0.15.0, payload schemas in v0.30.2 and v0.32.0 (v0.76.0 pinned);
+5. capability and event registration against OpenVibe.Contracts — ✔ v0.15.0, payload schemas in v0.30.2 and v0.32.0 (v0.79.0 pinned);
 6. a migration/seed strategy ✔, a written threat review ✔ ([docs/threat-review.md](docs/threat-review.md),
    internal; an independent review is still due), and sitemap/robots ✔ (no feed);
 7. acceptance tests proving the advertised functionality — ✔ (table above).

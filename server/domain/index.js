@@ -19,7 +19,7 @@
  *   ctx.lockCreator(t, s)      lock a creator's profile row: settings changes and per-creator limits
  *                              (20 active goals, 25 tokens, 50 moderators, 10 invitations) take it, so two
  *                              requests at once count and write one after the other
- *   ctx.outbox.emit(t, …)      a durable event, inside the transaction (openvibe-sdk outbox)
+ *   ctx.outbox.emitIn(t, …)    a durable event, inside the transaction (openvibe-sdk outbox)
  *
  * Lock order (so two transactions never wait on each other in a cycle): a creator's profile row, then
  * tip_interactions rows (SELECT … FOR UPDATE, several by id), then tip_goals rows by id, then the
@@ -55,7 +55,8 @@ function createDomain({ db, config, outbox, billing, adapters, valkey = null, no
     ctx.within = (q, fn, opts) => (inTx(q) ? fn(q) : ctx.tx(fn, opts));
     ctx.afterCommit = (q, hook) => { if (inTx(q)) q.after(hook); else runHook(hook); };
     ctx.lockCreator = (t, subject) => t.maybe(sql`SELECT creator_subject FROM creator_tip_profiles WHERE creator_subject = ${subject} FOR UPDATE`);
-    ctx.outboxKick = () => { try { outbox.kick(); } catch { /* relay off */ } };
+    // The SDK's kick is async: a rejected relay-off throw would be an unhandled rejection on a floating call.
+    ctx.outboxKick = () => { try { Promise.resolve(outbox.kick()).catch(() => {}); } catch { /* relay off */ } };
 
     ctx.profiles = createProfiles(ctx);
     ctx.goals = createGoals(ctx);

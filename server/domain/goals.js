@@ -20,6 +20,7 @@ const { sql } = require('openvibe-sdk/db');
 const { fail, iso, prefixedId, text, positiveInt } = require('../util');
 const { safeUrl } = require('./profiles');
 const { publicName, shownName, publicView } = require('./privacy');
+const { ENVELOPE } = require('../events/outbox');
 
 function createGoals(ctx) {
     const { db } = ctx;
@@ -102,9 +103,12 @@ function createGoals(ctx) {
     async function changed(t, goalId, reason, { interactionId = null, by = null } = {}) {
         const g = await t.one(sql`UPDATE tip_goals SET revision = revision + 1, updated_at = ${iso(ctx.now())} WHERE id = ${goalId} RETURNING *`);
         const [view] = await presentMany(t, [g]);
-        await ctx.outbox.emit(t, 'tips.goal.updated', { type: 'goal', id: g.id, revision: g.revision }, {
-            goal_id: g.id, creator: view.creator, title: g.title, target_amount: g.target_amount, current_amount: view.current_amount,
-            currency: g.currency, status: g.status, reached: view.reached, reason, interaction_id: interactionId,
+        await ctx.outbox.emitIn(t, {
+            ...ENVELOPE, event_type: 'tips.goal.updated', subject: { type: 'goal', id: g.id, revision: g.revision },
+            payload: {
+                goal_id: g.id, creator: view.creator, title: g.title, target_amount: g.target_amount, current_amount: view.current_amount,
+                currency: g.currency, status: g.status, reached: view.reached, reason, interaction_id: interactionId,
+            },
         });
         await ctx.overlays.addGoalDelivery(t, g.creator_subject, view, { reason, interactionId, by, dedupe: `goal:${g.id}:r${g.revision}` });
         return view;

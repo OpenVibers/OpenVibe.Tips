@@ -28,6 +28,7 @@ const { sql } = require('openvibe-sdk/db');
 const { fail, iso, prefixedId, sha256, userSubject, displayName, text, readCursor, cursorOf } = require('../util');
 const { publicView } = require('./privacy');
 const filter = require('./filter');
+const { ENVELOPE } = require('../events/outbox');
 
 const INVITE_RE = /^tmin_[A-Za-z0-9_-]{43}$/;
 const INVITE_TTL_MS = 7 * 24 * 3600 * 1000;
@@ -130,9 +131,12 @@ function createModeration(ctx) {
         await t.exec(sql`INSERT INTO tip_moderation_log (creator_subject, interaction_id, action, by_role, actor, reason, created_at)
             VALUES (${i.creator_subject}, ${i.id}, ${action}, ${role}, ${actor}, ${reason}, ${iso(ctx.now())})`);
         if (!i.test) {
-            await ctx.outbox.emit(t, 'tips.interaction.moderated', { type: 'interaction', id: i.id }, {
-                interaction_id: i.id, creator: { type: 'user', id: i.creator_subject }, action, by: role,
-                moderation_state: i.moderation, cancelled_effects: cancelled,
+            await ctx.outbox.emitIn(t, {
+                ...ENVELOPE, event_type: 'tips.interaction.moderated', subject: { type: 'interaction', id: i.id },
+                payload: {
+                    interaction_id: i.id, creator: { type: 'user', id: i.creator_subject }, action, by: role,
+                    moderation_state: i.moderation, cancelled_effects: cancelled,
+                },
             });
             ctx.afterCommit(t, () => ctx.outboxKick());
         }

@@ -28,6 +28,7 @@ const { fail, iso, prefixedId, sha256, text } = require('../util');
 const { safeUrl } = require('./profiles');
 const { isHidden, publicView } = require('./privacy');
 const { createOverlayHub } = require('./overlay-hub');
+const { ENVELOPE } = require('../events/outbox');
 
 const SCOPES = ['alerts', 'goals'];
 const STREAM_LOCK = 4610;   // the advisory-lock namespace of a creator's overlay stream (Tips' port)
@@ -247,8 +248,11 @@ function createOverlays(ctx) {
                 WHERE seq = ANY(${pending}) AND status = 'pending' RETURNING id, creator_subject, kind, interaction_id, goal_id, test`);
             for (const row of done) {
                 if (row.test) continue;
-                await ctx.outbox.emit(t, 'tips.overlay.delivered', { type: 'overlay_delivery', id: row.id }, {
-                    delivery_id: row.id, creator: { type: 'user', id: row.creator_subject }, kind: row.kind, interaction_id: row.interaction_id, goal_id: row.goal_id,
+                await ctx.outbox.emitIn(t, {
+                    ...ENVELOPE, event_type: 'tips.overlay.delivered', subject: { type: 'overlay_delivery', id: row.id },
+                    payload: {
+                        delivery_id: row.id, creator: { type: 'user', id: row.creator_subject }, kind: row.kind, interaction_id: row.interaction_id, goal_id: row.goal_id,
+                    },
                 });
             }
             if (done.some((r) => !r.test)) t.after(ctx.outboxKick);
@@ -269,9 +273,12 @@ function createOverlays(ctx) {
             rows.sort((a, b) => a.seq - b.seq);
             for (const row of rows) {
                 if (row.test) continue;
-                await ctx.outbox.emit(t, 'tips.overlay.failed', { type: 'overlay_delivery', id: row.id }, {
-                    delivery_id: row.id, creator: { type: 'user', id: row.creator_subject }, kind: row.kind, interaction_id: row.interaction_id,
-                    goal_id: row.goal_id, reason: 'no overlay showed it within the delivery window',
+                await ctx.outbox.emitIn(t, {
+                    ...ENVELOPE, event_type: 'tips.overlay.failed', subject: { type: 'overlay_delivery', id: row.id },
+                    payload: {
+                        delivery_id: row.id, creator: { type: 'user', id: row.creator_subject }, kind: row.kind, interaction_id: row.interaction_id,
+                        goal_id: row.goal_id, reason: 'no overlay showed it within the delivery window',
+                    },
                 });
             }
             return rows.length;

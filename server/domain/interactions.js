@@ -47,6 +47,7 @@ const { fail, iso, prefixedId, positiveInt, text, storable, userSubject, entityR
 const { VOICES } = require('./profiles');
 const { parsePrivacy, publicName, shownName, privacyOf, isAnonymous, publicView, ANONYMOUS } = require('./privacy');
 const { BillingCallError } = require('../billing-client');
+const { ENVELOPE } = require('../events/outbox');
 
 const KINDS = ['tip', 'paid_message', 'tts', 'media_request'];
 // Origins whose chat effects Tips delivers: its own requests, and EXTERNAL tips Billing announced
@@ -311,7 +312,7 @@ function createInteractions(ctx) {
         if (i.origin !== 'import' && i.moderation === 'visible') await release(t, i, filter);
         i = await recomputeDelivery(t, i.id);
         if (!test && i.origin !== 'import') {
-            await ctx.outbox.emit(t, 'tips.interaction.ready', { type: 'interaction', id: i.id }, summary(i));
+            await ctx.outbox.emitIn(t, { ...ENVELOPE, event_type: 'tips.interaction.ready', subject: { type: 'interaction', id: i.id }, payload: summary(i) });
         }
         if (verdict.hit) await ctx.moderation.recordScreened(t, i, verdict);
         ctx.afterCommit(t, () => { ctx.effects.kick(); ctx.outboxKick(); });
@@ -346,7 +347,7 @@ function createInteractions(ctx) {
         if (!i || i.payment_state !== 'pending') return i;
         const row = await t.one(sql`UPDATE tip_interactions SET payment_state = 'failed', delivery_state = 'cancelled', transfer_due = false,
                 failure = ${`${code}${detail ? `: ${String(detail).slice(0, 240)}` : ''}`}, updated_at = ${iso(ctx.now())} WHERE id = ${i.id} RETURNING *`);
-        if (!i.test) await ctx.outbox.emit(t, 'tips.interaction.cancelled', { type: 'interaction', id: i.id }, { ...summary(row), reason: 'payment_failed', code });
+        if (!i.test) await ctx.outbox.emitIn(t, { ...ENVELOPE, event_type: 'tips.interaction.cancelled', subject: { type: 'interaction', id: i.id }, payload: { ...summary(row), reason: 'payment_failed', code } });
         return row;
     }
 
@@ -425,7 +426,7 @@ function createInteractions(ctx) {
             const row = await t.one(sql`UPDATE tip_interactions SET delivery_state = 'cancelled', updated_at = ${at} WHERE id = ${i.id} RETURNING *`);
             await t.exec(sql`UPDATE paid_messages SET status = 'cancelled', updated_at = ${at} WHERE interaction_id = ${i.id} AND status = 'queued'`);
             await t.exec(sql`UPDATE paid_media_requests SET status = 'cancelled', updated_at = ${at} WHERE interaction_id = ${i.id} AND status = 'queued'`);
-            if (!now.test) await ctx.outbox.emit(t, 'tips.interaction.cancelled', { type: 'interaction', id: i.id }, { ...summary(row), reason: 'payment_reversed' });
+            if (!now.test) await ctx.outbox.emitIn(t, { ...ENVELOPE, event_type: 'tips.interaction.cancelled', subject: { type: 'interaction', id: i.id }, payload: { ...summary(row), reason: 'payment_reversed' } });
             cancelled = true;
         }
         return cancelled ? 'reversed_cancelled' : 'reversed';
@@ -439,7 +440,7 @@ function createInteractions(ctx) {
         await t.exec(sql`UPDATE paid_media_requests SET status = 'cancelled', updated_at = ${at} WHERE interaction_id = ${i.id} AND status = 'queued'`);
         if (!n) return false;
         const row = await t.one(sql`UPDATE tip_interactions SET delivery_state = 'cancelled', updated_at = ${at} WHERE id = ${i.id} RETURNING *`);
-        if (!i.test) await ctx.outbox.emit(t, 'tips.interaction.cancelled', { type: 'interaction', id: i.id }, { ...summary(row), reason });
+        if (!i.test) await ctx.outbox.emitIn(t, { ...ENVELOPE, event_type: 'tips.interaction.cancelled', subject: { type: 'interaction', id: i.id }, payload: { ...summary(row), reason } });
         return true;
     }
 
@@ -459,7 +460,7 @@ function createInteractions(ctx) {
             delivered_at = CASE WHEN ${next === 'delivered'} THEN ${at}::timestamptz ELSE delivered_at END, updated_at = ${at} WHERE id = ${id} RETURNING *`);
         if (next === 'failed' && !i.test) {
             const failed = effects.filter((e) => e.state === 'failed').map(({ effect, adapter, last_error: lastError }) => ({ effect, adapter, last_error: lastError }));
-            await ctx.outbox.emit(t, 'tips.interaction.failed', { type: 'interaction', id }, { ...summary(row), failed_effects: failed });
+            await ctx.outbox.emitIn(t, { ...ENVELOPE, event_type: 'tips.interaction.failed', subject: { type: 'interaction', id }, payload: { ...summary(row), failed_effects: failed } });
         }
         return row;
     }
@@ -714,9 +715,12 @@ function createInteractions(ctx) {
                     WHERE envelope->'subject'->>'type' = 'interaction' AND envelope->'subject'->>'id' = ANY(${ids}) AND envelope->'payload' ? 'supporter'`);
                 for (const i of done) {
                     if (i.test) continue;
-                    await ctx.outbox.emit(t, 'tips.interaction.erased', { type: 'interaction', id: i.id }, {
-                        interaction_id: i.id, creator: { type: 'user', id: i.creator_subject }, erased_at: at,
-                        redacts: { subject_type: 'interaction', subject_ids: [i.id] },
+                    await ctx.outbox.emitIn(t, {
+                        ...ENVELOPE, event_type: 'tips.interaction.erased', subject: { type: 'interaction', id: i.id },
+                        payload: {
+                            interaction_id: i.id, creator: { type: 'user', id: i.creator_subject }, erased_at: at,
+                            redacts: { subject_type: 'interaction', subject_ids: [i.id] },
+                        },
                     });
                 }
                 t.after(ctx.outboxKick);
