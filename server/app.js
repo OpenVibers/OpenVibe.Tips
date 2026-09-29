@@ -57,6 +57,7 @@ function createApp(opts = {}) {
     const domain = createDomain({ db, config, outbox, billing, adapters, valkey, now, log });
     const apiAuth = createApiAuth({ config, keys, userAuth });
     const release = require('openvibe-shared/release').createRelease({ service: 'tips', root: path.join(__dirname, '..') });
+    require('./web/layout').setRelease(release.release);
     const layout = createLayout({ config, release });
 
     const app = express();

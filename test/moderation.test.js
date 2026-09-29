@@ -230,7 +230,8 @@ const validModerated = payloadValidator('tips.interaction.moderated');
         const id = r.json.interaction.id;
         assert.strictEqual((await t.call('POST', `/api/v1/interactions/${id}/hide`, { user: alex })).status, 200);
         await t.deliver(billing.settlePurchase((await domain.interactions.get(t.db, id)).billing_intent_id));
-        await new Promise((ok) => setTimeout(ok, 50));
+        // The settlement reaches the row through the delivery; wait for it (bounded) instead of a fixed sleep.
+        for (let k = 0; k < 100 && (await domain.interactions.get(t.db, id)).payment_state === 'pending'; k++) await new Promise((ok) => setTimeout(ok, 20));
         await domain.interactions.processDueTransfers();
         const i = await domain.interactions.get(t.db, id);
         assert.strictEqual(i.payment_state, 'settled');

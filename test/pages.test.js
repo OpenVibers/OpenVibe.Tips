@@ -33,6 +33,16 @@ const { boot, check, done } = require('./helpers/app');
         assert.ok(!r.text.includes('href="/bob"'), 'switched-off pages are not listed');
     });
 
+    await check('every page carries the boost marker and script, and the navbar signs in back to the current page', async () => {
+        for (const [p, u] of [['/', null], ['/alex', viewer], ['/dashboard', alex], ['/receipts', viewer], ['/updates', alex]]) {
+            const r = await get(p, u);
+            assert.strictEqual(r.status, 200, p);
+            assert.match(r.text, /<meta name="ov-boost" content="tips@[^"]+">/, p);
+            assert.match(r.text, /<script src="\/shared\/boost\.js\?v=[0-9a-f]{12}" data-main="#main" defer><\/script>/, p);
+            assert.match(r.text, /"loginUrl":"\/auth\/login\?next=\{path\}"/, p);
+        }
+    });
+
     await check('creator page: indexable when on, goals and a no-JS tip form', async () => {
         const r = await get('/alex');
         assert.strictEqual(r.status, 200);

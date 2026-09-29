@@ -2,7 +2,7 @@
 (function () {
     'use strict';
     document.documentElement.classList.add('js');
-    document.addEventListener('DOMContentLoaded', function () {
+    function wire() {
         var form = document.querySelector('.tip-form');
         if (!form) return;
         function sync() {
@@ -11,5 +11,7 @@
         }
         form.addEventListener('change', sync);
         sync();
-    });
+    }
+    document.addEventListener('DOMContentLoaded', wire);
+    document.addEventListener('ov:boost:load', wire);   // a swapped-in page's tip form wires the same way
 })();

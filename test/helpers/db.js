@@ -56,8 +56,20 @@ async function testDb({ store = process.env.TIPS_TEST_STORE || 'pglite', max = 4
             // PgBouncer keeps its server connections after the client pool closes: end them here, or
             // every run would leave its roles' idle connections holding the server's slots.
             await su.query('SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = ANY($1)', [[name, owner]]);
-            await su.query(`DROP SCHEMA IF EXISTS ${name} CASCADE`);
-            for (const r of [name, owner]) { await su.query(`DROP OWNED BY ${r}`); await su.query(`DROP ROLE ${r}`); }
+            // Terminating is asynchronous: wait until the sessions are gone, then retry catalog DDL that races another
+            // session's catalog write ('tuple concurrently updated', XX000) a few times.
+            for (let i = 0; i < 100; i++) {
+                const left = await su.query('SELECT count(*)::int AS n FROM pg_stat_activity WHERE usename = ANY($1)', [[name, owner]]);
+                if (!Number(left.rows[0].n)) break;
+                await new Promise((ok) => setTimeout(ok, 50));
+            }
+            const ddl = async (stmt) => {
+                for (let i = 0; ; i++) {
+                    try { return await su.query(stmt); } catch (err) { if (err.code !== 'XX000' || i >= 5) throw err; await new Promise((ok) => setTimeout(ok, 100 * (i + 1))); }
+                }
+            };
+            await ddl(`DROP SCHEMA IF EXISTS ${name} CASCADE`);
+            for (const r of [name, owner]) { await ddl(`DROP OWNED BY ${r}`); await ddl(`DROP ROLE ${r}`); }
         } finally { await su.close(); }
     }
     let db;
