@@ -27,7 +27,8 @@ const valkeyAvailable = () => !!process.env.OV_TEST_VALKEY_URL;
 async function testDb({ store = process.env.TIPS_TEST_STORE || 'pglite', max = 4 } = {}) {
     if (store !== 'pg') {
         const db = createDb({ pglite: true, service: 'tips-test', log: quiet });
-        await db.migrate({ dir: MIGRATIONS, log: quiet });
+        // windowDays 0: a test wants the final schema, not a contract held for its N-1 window.
+        await db.migrate({ dir: MIGRATIONS, log: quiet, windowDays: 0 });
         return { db, store: 'pglite', close: () => db.close().catch(() => {}) };
     }
     if (!pgAvailable()) throw new Error('store pg needs OV_TEST_PG_URL and OV_TEST_PG_DIRECT_URL (openvibe-sdk scripts/test-services.sh up)');
@@ -62,7 +63,7 @@ async function testDb({ store = process.env.TIPS_TEST_STORE || 'pglite', max = 4
     let db;
     try {
         const ownerDb = createDb({ url: as(process.env.OV_TEST_PG_DIRECT_URL, owner), service: 'tips-test-migrate', max: 1, log: quiet });
-        try { await ownerDb.migrate({ dir: MIGRATIONS, log: quiet }); } finally { await ownerDb.close(); }
+        try { await ownerDb.migrate({ dir: MIGRATIONS, log: quiet, windowDays: 0 }); } finally { await ownerDb.close(); }
         db = createDb({ url: as(process.env.OV_TEST_PG_URL, name), service: 'tips-test', max, log: quiet });
     } catch (e) { await drop().catch(() => {}); throw e; }   // a failed setup leaves nothing behind
     return {

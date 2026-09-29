@@ -3,10 +3,9 @@
 > Creator support: tips, goals, paid messages, TTS and media requests, overlays.
 
 **Status:** alpha — runtime built and tested against stubs (roadmap Wave 9). Deployed internally, not
-launched: running on the host since 2026-09-23 on `127.0.0.1:4610` only, holding the Live import and no
+launched: running on the host since 2026-09-23 on `127.0.0.1:4610` only, with no
 creator profile yet, with no public route. OpenVibe.Live remains where tips happen until the Billing cutover (see *What waits*).
-Data: PostgreSQL through PgBouncer, and Valkey for shared state ([ADR-035](https://github.com/OpenVibers/OpenVibe.Contracts/blob/main/docs/adr/ADR-035-postgresql-and-valkey.md));
-production runs the SQLite release until the switch in *Deploy*.  
+Data: PostgreSQL through PgBouncer, and Valkey for shared state ([ADR-035](https://github.com/OpenVibers/OpenVibe.Contracts/blob/main/docs/adr/ADR-035-postgresql-and-valkey.md));  
 **Domain:** `openvibe.tips` (keeps its OpenVibe.Sites placeholder until the launch rule below holds)  
 **Port / service id:** 4610 / `tips`  
 **Decision:** [ADR-012](https://github.com/OpenVibers/OpenVibe.Contracts/blob/main/docs/adr/ADR-012-economic-classification.md) — Tips never moves money; Billing does.  
@@ -22,7 +21,7 @@ from *interaction delivered*.
 ## Owns
 
 - `tip_interactions`, `creator_tip_profiles`, `tip_goals`, `tip_goal_contributions`, `paid_messages`,
-  `paid_media_requests`, `overlay_configs`, `overlay_deliveries`, `interaction_effects`, `migration_maps`
+  `paid_media_requests`, `overlay_configs`, `overlay_deliveries`, `interaction_effects`
   (its own PostgreSQL database `ov_tips`, schema in [migrations/](migrations/), access in `server/db.js`) —
   interaction state and **references** to Billing transaction ids, never a mutable cash balance
 - revocable scoped overlay tokens (`overlay_tokens`, hashed at rest; never creator cookies)
@@ -45,7 +44,7 @@ from *interaction delivered*.
   PowerChat, once Billing receives the PowerChat webhook)
 - **OpenVibe.Events** — Billing's events in (signed webhook + openvibe-sdk inbox), Tips' events out
   (openvibe-sdk transactional outbox)
-- **OpenVibe.Network** — SSO for people, service tokens, JWKS, identity resolve (importer)
+- **OpenVibe.Network** — SSO for people, service tokens, JWKS, identity resolve
 - **OpenVibe.Live** — chat delivery through `/internal/tips/deliveries` (deployed in Live since `f11f809`; [docs/live-patch.diff](docs/live-patch.diff) is the original patch) until OpenVibe.Chat exposes paid messages; overlay consumer
 - **OpenVibe.Shared** v1.25.0 (app icon, SSR footer, noscript nav, release manifest, legal pages) and
   the Network's `navbar.js`; **openvibe-contracts** v0.76.0 and **openvibe-sdk** v0.18.0 (service tokens,
@@ -65,7 +64,6 @@ Called elsewhere, as the service principal `tips`:
 |---|---|---|
 | OpenVibe.Billing | `billing.intent.create`, `billing.transfer.create` | checkout, and a tip from credit |
 | OpenVibe.Events | `events.event.publish`; `events.subscription.manage` once (`npm run subscribe`) | the outbox relay; the `billing.transaction.*` and `billing.receipt.*` subscriptions |
-| OpenVibe.Network | `identity.subject.resolve` | the Live importer's creator mapping |
 | OpenVibe.Live | `live.tips_delivery.write` (only with `TIPS_CHAT_ADAPTER=live-chat`) | chat lines and alerts through `/internal/tips/deliveries` |
 
 ## Run it
@@ -79,8 +77,6 @@ eval "$(node_modules/openvibe-sdk/scripts/test-services.sh up)"   # PostgreSQL 1
 npm test                        # … now also test/integration.test.js on the containers
 npm run test:pg                 # every test file through PgBouncer and Valkey
 npm run subscribe               # create the billing.transaction.* and billing.receipt.* subscriptions in OpenVibe.Events
-node scripts/import-live.js --live-db <live snapshot> --billing-db <billing snapshot> [--dry-run] [--json]
-npm run migrate-to-postgres -- [--sqlite <copy>] [--pglite] [--json]   # the one-time SQLite import (Deploy)
 ```
 
 Production (deployed, loopback only): `/opt/openvibe.tips`, env `/etc/openvibe/tips.env`, unit
@@ -140,8 +136,8 @@ minus what Billing took back) — the number that must equal Billing's books —
   (settings changes and per-creator limits), the interaction row, its goals by id, the creator's overlay
   stream (an advisory lock, so a creator's deliveries commit in seq order), then the rest. Serialization
   failures and deadlocks are retried by the data layer.
-- Text is made storable on the way in: PostgreSQL keeps no NUL character, and jsonb no unpaired surrogate
-  (SQLite kept both), so they are dropped or replaced (U+FFFD) in what people and Billing's events send.
+- Text is made storable on the way in: PostgreSQL keeps no NUL character, and jsonb no unpaired surrogate,
+  so they are dropped or replaced (U+FFFD) in what people and Billing's events send.
 - **Background work runs in every process** and claims its rows: due effects and due transfers with a
   lease (`FOR UPDATE SKIP LOCKED`, the lease in `next_attempt_at` / `next_transfer_at`), the overlay
   window sweep with `SKIP LOCKED`, the outbox relay by the SDK's lease; prunes are idempotent deletes.
@@ -269,8 +265,8 @@ Consumed:
 `donor_name` — null when `anonymous` — `message`, `provider`, `provider_event_id`, `app_purpose`/`app_ref`,
 `test`) is sent by Billing only once it is the money authority (`BILLING_AUTHORITY=billing` in
 billing.env); before that Live's own PowerChat webhook announces those tips, so nothing is announced
-twice. A `goal:<id>` in `app_purpose`/`app_ref` picks the goal: a Tips goal id, or a Live `donation_goals`
-id mapped by the Live import; otherwise Live's rule (the only active goal).
+twice. A `goal:<id>` in `app_purpose`/`app_ref` picks the goal (a Tips goal id); otherwise the creator's
+only active goal.
 
 ## Overlays
 
@@ -358,22 +354,6 @@ Never limited: `/api/health`, `/api/ready`, `/release.json`, `/metrics`, the ove
 `TIPS_OVERLAY_MAX_STREAMS`) and the signed Events deliveries at `/internal/events`. `test/actor-limits.test.js`.
 With `VALKEY_URL` every process counts one caller together (`test/integration.test.js`).
 
-## Import and reconciliation
-
-`scripts/import-live.js` reads a **copy** of Live's database (read-only) after Billing's own import, and
-a copy of Billing's database for the links and totals:
-
-- `transactions` donations → interactions (`settlement imported`), linked to Billing by its importer key
-  `import:live:txn:<live id>`; non-completed rows excluded with the reason; rows before
-  `stats_vibes_reset_at` flagged test (as Billing flags them); unmapped creators **held**, released by a
-  later run; Live refunds applied to the donation they undo
-- PowerChat donations recorded only in `chat_messages` → EXTERNAL interactions; the celebration line of a
-  site-routed `pcdon` tip is matched to its transaction and not counted twice
-- `donation_goals` → goals, Live's `current_amount` carried over as `opening_amount`
-- reconciliation: per creator, Tips' `settled_via_billing` must equal Billing's (donations to them minus
-  refunds from them, non-test); mismatches are listed and the exit code is 1. Every source row ends up
-  imported, excluded with a reason, or held (`migration_maps`).
-
 ## Acceptance (must be true before "done")
 
 | Criterion | Evidence |
@@ -381,12 +361,11 @@ a copy of Billing's database for the links and totals:
 | a duplicate provider webhook yields one Billing transaction and one logical interaction | `test/settlement.test.js` (same event redelivered, same transaction under a new event id, foreign donation delivered three times) |
 | overlay replay never charges again | `test/overlays.test.js` (three `Last-Event-ID` replays: transfers, contributions, goal total, payable, events unchanged) |
 | the creator can use openvibe.tips with Live offline | pages, API, overlays and settlement need no Live call (`test/pages.test.js`, `test/overlays.test.js` run with no Live); only the `live-chat` adapter talks to Live and its failure never touches payment (`test/delivery.test.js`) — **not yet demonstrated on the real host** |
-| creator totals reconcile exactly to Billing | `test/import.test.js` (fixtures in Live's schema and Billing's importer keys; a Billing donation Tips never saw is reported, then reconciles once its event arrives); `test/api.test.js` (totals = the stub Billing payable) |
+| creator totals reconcile exactly to Billing | `test/api.test.js` (totals = the stub Billing payable) |
 | simulation never counted; token revocation immediate; goals from settled only; reversal keeps the delivery record | `test/overlays.test.js`, `test/api.test.js`, `test/settlement.test.js` |
-| an EXTERNAL PowerChat tip Billing announced is celebrated once: Live chat line, overlay, goal; never Billing money | `test/external.test.js` (redelivery and republish, same key as `POST /interactions/external`, Tips and Live goal ids, anonymous, test receipts, malformed payloads) |
+| an EXTERNAL PowerChat tip Billing announced is celebrated once: Live chat line, overlay, goal; never Billing money | `test/external.test.js` (redelivery and republish, same key as `POST /interactions/external`, Tips goal ids, anonymous, test receipts, malformed payloads) |
 | paid messages are filtered before they are shown or read; the creator and their moderators hide and show them without touching the money | `test/moderation.test.js` (mask, hold and release, invisible/full-width evasion, TTS text, invitation links, hide cancels queued chat/TTS and retracts the overlay live/replay/state, restore, pending payments, who may moderate, event payloads) |
 | the suite passes on PostgreSQL behind PgBouncer in transaction mode; one settlement or reversal raced across two processes counts once; the unpaid-checkout limit holds under concurrency; leased work runs once; flushing Valkey changes no money answer (ADR-007 2026-09-24, ADR-035) | `npm run test:pg`; `test/integration.test.js` (two app instances on one database and one Valkey) |
-| the SQLite data moves whole: every table and column, verified by counts and checksums | `test/sqlite-import.test.js`, `test/migrations.test.js` (no column left behind) |
 | a supporter's privacy holds everywhere; the creator chooses what public pages show; export and erasure keep the books reconciled | `test/privacy.test.js` (anonymous / hidden amount / private message across API, overlays, chat jobs, pages and events; goal and supporters page settings; export; erasure scrubs rows, overlay payloads, stored answers and unsent events, emits `tips.interaction.erased`, totals still equal Billing) |
 
 ## What waits
@@ -418,23 +397,6 @@ Rollback: ovhost puts the previous sha back by itself when `/api/ready` does not
 restart; afterwards `sudo ovhost rollback tips --to <sha>`. Migrations are expand-only until a
 `contract` migration, which waits out the 7-day N-1 window.
 
-**The switch from SQLite to PostgreSQL** (once; the procedure is the SDK's
-[migrating-to-postgresql.md](https://github.com/OpenVibers/OpenVibe.SDK/blob/main/docs/migrating-to-postgresql.md), section 6):
-1. `sudo /opt/openvibe.host/roles/data/add-service.sh tips` — database `ov_tips`, its roles and Valkey
-   user; it writes `DATABASE_URL`, `DATABASE_DIRECT_URL`, `VALKEY_URL`, `VALKEY_PREFIX` into
-   `/etc/openvibe/tips.env`.
-2. Rehearse on a copy of `/var/lib/openvibe-tips/tips.db` (`sqlite3 … ".backup …"` as the service user):
-   `npm run migrate-to-postgres -- --sqlite <copy> --pglite` must end OK.
-3. Merge the PostgreSQL release; do not deploy it yet.
-4. `sudo systemctl stop openvibe-tips` (the write freeze), then back up `tips.db`.
-5. From the new release's directory, as the service user with the service's environment:
-   `node scripts/migrate-to-postgres.js` — it migrates as the owner, imports every table with
-   `truncate`, verifies counts and checksums, changes nothing in the SQLite file, and exits 1 unless OK.
-6. `sudo ovhost deploy tips`; check `/api/ready` shows `db` `store: postgresql` and `valkey` ok, the
-   dashboard, a receipt and an overlay, and a flat error rate.
-7. Keep `tips.db` read-only for 7 days (the rollback: the previous release reads it, losing the writes
-   made since the switch unless they are replayed), then `ovhost archive push` it and delete it.
-
 ## Launch rule
 
 This repository does not make the product real, and the domain keeps its placeholder page on
@@ -449,8 +411,7 @@ exist here (plan §12.12):
    principal is provisioned on the host;
 3. server-rendered public routes useful without JavaScript — ✔;
 4. real persistence and end-to-end workflows — ✔ against stubs; not yet against the real Billing and
-   Events (Billing is in shadow and has sent no events; production holds the Live import and no creator
-   profile);
+   Events (Billing is in shadow and has sent no events; production has no creator profile yet);
 5. capability and event registration against OpenVibe.Contracts — ✔ v0.15.0, payload schemas in v0.30.2 and v0.32.0 (v0.76.0 pinned);
 6. a migration/seed strategy ✔, a written threat review ✔ ([docs/threat-review.md](docs/threat-review.md),
    internal; an independent review is still due), and sitemap/robots ✔ (no feed);

@@ -6,15 +6,10 @@
  *   keys      the Network's RS256 public key (OV_NETWORK_PUBLIC_KEY, else GET /api/.well-known/jwks,
  *             refreshed every 6 h and retried every 30 s until it loads). It verifies service tokens
  *             (audience openvibe.tips) and the browser's Network user JWT, both offline.
- *   identity  Live user ids → canonical subjects via POST /internal/identity/resolve-batch
- *             (capability identity.subject.resolve, audience openvibe.network) — the importer only.
  */
 const crypto = require('crypto');
-const { serviceAuth } = require('openvibe-contracts');
 const jwt = require('jsonwebtoken');
 const { OpenVibeAuthClient } = require('openvibe-shared/auth-client');
-
-const BATCH = 500;
 
 function createKeyProvider(config, { fetchImpl = globalThis.fetch, log = console } = {}) {
     let pem = config.network.publicKey ? crypto.createPublicKey(config.network.publicKey).export({ type: 'spki', format: 'pem' }) : null;
@@ -39,7 +34,7 @@ function createKeyProvider(config, { fetchImpl = globalThis.fetch, log = console
         if (config.network.publicKey || timer) return;
         const retry = () => load().then((k) => { if (!k) setTimeout(retry, 30_000).unref(); });
         retry();
-        timer = setInterval(() => { load(); }, 6 * 60 * 60 * 1000);
+        timer = setInterval(async () => { await load(); }, 6 * 60 * 60 * 1000);
         timer.unref();
     }
     function stop() { if (timer) clearInterval(timer); timer = null; }
@@ -74,47 +69,4 @@ function createUserAuth(config, keys) {
     return { client, verify };
 }
 
-function createIdentity(config, { fetchImpl = globalThis.fetch } = {}) {
-    const base = config.network.internalUrl;
-    let tokens = null;
-    const tokenClient = () => {
-        if (!tokens) {
-            tokens = serviceAuth.createTokenClient({
-                tokenUrl: `${base}/oauth/token`, clientId: config.oauth.clientId, clientSecret: config.oauth.clientSecret,
-                audience: 'openvibe.network', scope: 'identity.subject.resolve', fetchImpl,
-            });
-        }
-        return tokens;
-    };
-
-    async function post(body, retried = false) {
-        const res = await fetchImpl(`${base}/internal/identity/resolve-batch`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...(await tokenClient().authHeaders()) },
-            body: JSON.stringify(body),
-            signal: AbortSignal.timeout(10000),
-        });
-        if (res.status === 401 && !retried) { tokenClient().invalidate(); return post(body, true); }
-        const data = await res.json().catch(() => null);
-        if (!res.ok || !data || typeof data.results !== 'object') throw new Error(`resolve-batch ${res.status}: ${(data && (data.detail || data.error)) || 'bad response'}`);
-        return data.results;
-    }
-
-    /** Live user ids → Map(String(id) → { subject, username } | null). */
-    async function resolveLiveUsers(liveIds) {
-        const out = new Map();
-        const all = [...new Set(liveIds.map(String))];
-        for (let i = 0; i < all.length; i += BATCH) {
-            const chunk = all.slice(i, i + BATCH);
-            const results = await post({ system: 'live', type: 'user', ids: chunk });
-            for (const k of chunk) {
-                const p = results[k];
-                out.set(k, p && p.subject && p.subject.type === 'user' ? { subject: p.subject.id, username: p.username || null } : null);
-            }
-        }
-        return out;
-    }
-    return { resolveLiveUsers };
-}
-
-module.exports = { createKeyProvider, createUserAuth, createIdentity };
+module.exports = { createKeyProvider, createUserAuth };

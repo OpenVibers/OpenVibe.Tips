@@ -65,7 +65,7 @@ const TRANSFER_BATCH = 10;
 const TRANSFER_LEASE_MS = 5 * 60_000;
 const COLUMNS = ['id', 'creator_subject', 'supporter_subject', 'supporter_name', 'kind', 'amount', 'amount_cents', 'message', 'request',
     'funding', 'settlement', 'payment_state', 'delivery_state', 'test', 'billing_txn_id', 'billing_intent_id', 'funding_txn_id', 'provider', 'provider_ref',
-    'legacy_source', 'idempotency_key', 'origin', 'target', 'anonymous', 'hide_amount', 'private_message', 'created_at', 'updated_at'];
+    'idempotency_key', 'origin', 'target', 'anonymous', 'hide_amount', 'private_message', 'created_at', 'updated_at'];
 
 function createInteractions(ctx) {
     const { db, config, MONEY } = ctx;
@@ -148,7 +148,7 @@ function createInteractions(ctx) {
         const at = iso(ctx.now());
         const r = {
             supporter_subject: null, supporter_name: null, amount_cents: null, message: null, request: {}, test: false, billing_txn_id: null,
-            billing_intent_id: null, funding_txn_id: null, provider: null, provider_ref: null, legacy_source: null, idempotency_key: null,
+            billing_intent_id: null, funding_txn_id: null, provider: null, provider_ref: null, idempotency_key: null,
             target: null, origin: 'tips', anonymous: false, hide_amount: false, private_message: false, created_at: at, ...row,
         };
         const values = {
@@ -208,11 +208,11 @@ function createInteractions(ctx) {
                 key: `tips:transfer:${i.id}`, traceparent,
             });
             const txn = out.transaction;
-            await ctx.tx(async (t) => settleByTransaction(t, await lock(t, i.id), { id: txn.id, test: !!txn.test }), MONEY);
+            await ctx.tx(async (t) => await settleByTransaction(t, await lock(t, i.id), { id: txn.id, test: !!txn.test }), MONEY);
             return { settled: true };
         } catch (e) {
             if (e instanceof BillingCallError && !e.retryable) {
-                await ctx.tx(async (t) => failPayment(t, await lock(t, i.id), e.code || 'billing.refused', e.message), MONEY);
+                await ctx.tx(async (t) => await failPayment(t, await lock(t, i.id), e.code || 'billing.refused', e.message), MONEY);
                 return { settled: false, refused: e.code, detail: e.body && e.body.detail };
             }
             // Due again after the attempt's backoff (TRANSFER_BACKOFF[attempts - 1], the last one repeating).
@@ -237,7 +237,7 @@ function createInteractions(ctx) {
             });
         } catch (e) {
             if (e instanceof BillingCallError && !e.retryable) {
-                await ctx.tx(async (t) => failPayment(t, await lock(t, i.id), e.code || 'billing.refused', e.message), MONEY);
+                await ctx.tx(async (t) => await failPayment(t, await lock(t, i.id), e.code || 'billing.refused', e.message), MONEY);
                 fail(e.status === 409 ? 409 : 422, e.code || 'billing.refused', (e.body && e.body.detail) || 'Billing refused the checkout');
             }
             fail(502, 'tips.billing_unavailable', 'checkout is unavailable right now; nothing was charged — try again shortly');
@@ -280,7 +280,7 @@ function createInteractions(ctx) {
         if (other && other.id !== i.id) return other;
         const row = await t.one(sql`UPDATE tip_interactions SET billing_txn_id = ${txn.id}, test = test OR ${!!txn.test}, transfer_due = false, failure = NULL
             WHERE id = ${i.id} RETURNING *`);
-        return settle(t, row);
+        return await settle(t, row);
     }
 
     /** Inside a MONEY transaction, `i` locked (or created by it): pending/failed → settled, and the whole effect path. */
@@ -465,19 +465,15 @@ function createInteractions(ctx) {
     }
 
     /**
-     * The goal a PowerChat tip asked for: its app_purpose/app_ref carries `goal:<id>` — a Tips goal id,
-     * or a Live donation_goals id (links minted by Live), which the Live import mapped to a Tips goal.
-     * goals.contribute() still checks it is the creator's and active, else falls back to Live's rule.
+     * The goal a PowerChat tip asked for: its app_purpose/app_ref carries `goal:<id>` — a Tips goal id.
+     * goals.contribute() still checks it is the creator's and active, else falls back to the
+     * sole-active-goal rule.
      */
-    async function goalFromPurpose(q, ...refs) {
+    function goalFromPurpose(...refs) {
         for (const v of refs) {
             const m = storable(v || '').match(/(?:^|[:_-])goal[:_-]?([A-Za-z0-9_]+)/i);
             if (!m) continue;
-            if (/^\d+$/.test(m[1])) {
-                const map = await q.maybe(sql`SELECT target_id FROM migration_maps WHERE source = 'live' AND source_table = 'donation_goals' AND source_id = ${m[1]} AND status = 'imported'`);
-                if (map && map.target_id) return map.target_id;
-                continue;
-            }
+            if (/^\d+$/.test(m[1])) continue;   // a numeric id names no Tips goal (goal ids carry a prefix)
             return m[1];
         }
         return null;
@@ -502,7 +498,7 @@ function createInteractions(ctx) {
         const bits = Number(p.value_bits);
         const amount = Math.min(Number.isSafeInteger(bits) && bits > 0 ? bits : cents, config.limits.maxBits);
         const message = p.message ? storable(String(p.message).replace(/\r\n?/g, '\n').trim().slice(0, config.limits.messageChars)) || null : null;
-        const goalId = await goalFromPurpose(t, p.app_purpose, p.app_ref);
+        const goalId = goalFromPurpose(p.app_purpose, p.app_ref);
         const i = await insert(t, {
             id: prefixedId('tint', ctx.now()), creator_subject: creator, supporter_subject: null,
             supporter_name: p.anonymous ? 'Anonymous' : (displayName(p.donor_name) || 'Someone'), anonymous: !!p.anonymous, kind: 'tip', amount, amount_cents: cents,
@@ -596,7 +592,6 @@ function createInteractions(ctx) {
             out.effects = effects;
             out.provider = i.provider || null;
             out.provider_ref = i.provider_ref || null;
-            out.legacy_source = i.legacy_source || null;
         }
         return out;
     }

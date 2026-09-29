@@ -23,11 +23,9 @@ ExecStart=/usr/bin/env node /opt/openvibe.tips/server/index.js
 Restart=always
 RestartSec=5
 # DATABASE_URL, DATABASE_DIRECT_URL, VALKEY_URL and VALKEY_PREFIX come from the env file
-# (roles/data/add-service.sh tips). The state directory keeps the SQLite file of the release before
-# PostgreSQL: read-only rollback for the 7-day N-1 window, read by scripts/migrate-to-postgres.js.
+# (roles/data/add-service.sh tips).
 StateDirectory=openvibe-tips
 StateDirectoryMode=0700
-Environment=TIPS_DB_PATH=/var/lib/openvibe-tips/tips.db
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true

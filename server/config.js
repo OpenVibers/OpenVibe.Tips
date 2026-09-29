@@ -32,7 +32,7 @@ function loadConfig(env = process.env) {
 
         // PostgreSQL (ADR-035; OpenVibe.Host's data role writes all four into /etc/openvibe/tips.env):
         // DATABASE_URL is the pooled runtime role through PgBouncer (transaction mode), DATABASE_DIRECT_URL
-        // the owner role on a direct connection, for migrations at boot and the one-time import.
+        // the owner role on a direct connection, for migrations at boot.
         db: {
             url: env.DATABASE_URL || '',
             directUrl: env.DATABASE_DIRECT_URL || '',
@@ -43,10 +43,6 @@ function loadConfig(env = process.env) {
             url: env.VALKEY_URL || '',
             prefix: env.VALKEY_PREFIX || 'ov:tips:',
         },
-        // The SQLite file of the release before PostgreSQL: read (never written) only by
-        // scripts/migrate-to-postgres.js. The systemd unit sets /var/lib/openvibe-tips/tips.db.
-        sqlitePath: env.TIPS_DB_PATH || './data/tips.db',
-
         // Identity: service tokens and user tokens are RS256 JWTs signed by OpenVibe.Network.
         network: {
             url: networkUrl,
@@ -56,8 +52,7 @@ function loadConfig(env = process.env) {
         },
         audience: env.TIPS_AUDIENCE || 'openvibe.tips',
         // Tips' own client credentials (client `tips` in the Network): service tokens for Billing,
-        // Events, Live (chat delivery) and Network (identity resolve for the importer); and the
-        // OAuth code flow for browser sign-in (redirect ${baseUrl}/auth/callback).
+        // Events and Live (chat delivery); and the OAuth code flow for browser sign-in.
         oauth: {
             clientId: env.OV_OAUTH_CLIENT_ID || 'tips',
             clientSecret: env.OV_OAUTH_CLIENT_SECRET || '',

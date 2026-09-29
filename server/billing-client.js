@@ -58,7 +58,7 @@ function createBillingClient(config, { fetchImpl = globalThis.fetch, tokenClient
         } catch (e) {
             throw new BillingCallError(`Billing unreachable: ${e.message}`);
         }
-        if (res.status === 401 && !retried) { tokenClientFor().invalidate(); return call(method, path, { body, key, traceparent, retried: true }); }
+        if (res.status === 401 && !retried) { tokenClientFor().invalidate(); return await call(method, path, { body, key, traceparent, retried: true }); }
         const data = await res.json().catch(() => null);
         if (!res.ok) {
             const code = (data && (data.code || data.error)) || `http_${res.status}`;
@@ -69,17 +69,17 @@ function createBillingClient(config, { fetchImpl = globalThis.fetch, tokenClient
 
     return {
         /** { intent, checkout_url } — kind purchase: the supporter buys `bits` of credit. */
-        createIntent: ({ provider, subject, bits, successUrl, cancelUrl, key, traceparent }) => call('POST', '/api/v1/intents', {
+        createIntent: async ({ provider, subject, bits, successUrl, cancelUrl, key, traceparent }) => await call('POST', '/api/v1/intents', {
             body: { provider, kind: 'purchase', subject: { type: 'user', id: subject }, bits, success_url: successUrl, cancel_url: cancelUrl },
             key, traceparent,
         }),
         /** { transaction } — credit of `from` → payable of `to`, tagged with the interaction. */
-        createTransfer: ({ from, to, amount, kind, target, message, key, traceparent }) => call('POST', '/api/v1/transfers', {
+        createTransfer: async ({ from, to, amount, kind, target, message, key, traceparent }) => await call('POST', '/api/v1/transfers', {
             body: { from: { type: 'user', id: from }, to: { type: 'user', id: to }, amount, kind, target, message: message || undefined },
             key, traceparent,
         }),
-        refundTransfer: ({ txnId, amount, reason, key }) => call('POST', `/api/v1/transfers/${encodeURIComponent(txnId)}/refund`, { body: { amount, reason }, key }),
-        rates: () => call('GET', '/api/v1/rates'),
+        refundTransfer: async ({ txnId, amount, reason, key }) => await call('POST', `/api/v1/transfers/${encodeURIComponent(txnId)}/refund`, { body: { amount, reason }, key }),
+        rates: async () => await call('GET', '/api/v1/rates'),
     };
 }
 

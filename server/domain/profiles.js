@@ -65,7 +65,7 @@ function createProfiles(ctx) {
     const bySubject = async (q, s) => parse(await q.maybe(sql`SELECT * FROM creator_tip_profiles WHERE creator_subject = ${String(s || '')}`));
     const byHandle = async (q, h) => { const n = normalizeHandle(h); return n ? parse(await q.maybe(sql`SELECT * FROM creator_tip_profiles WHERE handle = ${n}`)) : null; };
     /** usr_… or a handle (with or without @). */
-    const resolve = (q, ref) => (/^usr_/.test(String(ref || '')) ? bySubject(q, String(ref)) : byHandle(q, ref));
+    const resolve = async (q, ref) => (/^usr_/.test(String(ref || '')) ? await bySubject(q, String(ref)) : await byHandle(q, ref));
 
     /** A handle not held by another creator: the username, else username-<suffix of the subject>. */
     async function freeHandle(q, subject, username) {
@@ -81,7 +81,7 @@ function createProfiles(ctx) {
      */
     async function ensure(subject, claims = {}, attempt = 0) {
         try { return await ensureOnce(subject, claims); } catch (e) {
-            if (e.code === '23505' && e.constraint === HANDLE_TAKEN && attempt < 2) return ensure(subject, claims, attempt + 1);
+            if (e.code === '23505' && e.constraint === HANDLE_TAKEN && attempt < 2) return await ensure(subject, claims, attempt + 1);
             throw e;
         }
     }
@@ -93,7 +93,7 @@ function createProfiles(ctx) {
             const row = await db.maybe(sql`INSERT INTO creator_tip_profiles (creator_subject, handle, display_name, avatar_url, created_at, updated_at)
                 VALUES (${subject}, ${await freeHandle(db, subject, username)}, ${name}, ${safeUrl(avatarUrl)}, ${at}, ${at})
                 ON CONFLICT (creator_subject) DO NOTHING RETURNING *`);
-            return row ? parse(row) : bySubject(db, subject);
+            return row ? parse(row) : await bySubject(db, subject);
         }
         const handle = normalizeHandle(username) && normalizeHandle(username) !== existing.handle ? await freeHandle(db, subject, username) : existing.handle;
         if (handle !== existing.handle || name !== existing.display_name || (safeUrl(avatarUrl) || null) !== (existing.avatar_url || null)) {
@@ -119,7 +119,7 @@ function createProfiles(ctx) {
             const p = parse(await t.maybe(sql`SELECT * FROM creator_tip_profiles WHERE creator_subject = ${String(subject || '')} FOR UPDATE`));
             if (!p) fail(404, 'tips.profile_not_found', 'no tip profile for this creator');
             if (expectedRevision != null && Number(expectedRevision) !== p.revision) fail(409, 'tips.revision_conflict', `the profile is at revision ${p.revision}`);
-            return change(t, p, patch);
+            return await change(t, p, patch);
         });
     }
 

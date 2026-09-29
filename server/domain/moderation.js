@@ -149,8 +149,8 @@ function createModeration(ctx) {
             ? t.one(sql`UPDATE tip_interactions SET filtered = true, moderation = 'held', moderated_at = ${at}, moderated_by = 'filter', updated_at = ${at} WHERE id = ${i.id} RETURNING *`)
             : t.one(sql`UPDATE tip_interactions SET filtered = true, updated_at = ${at} WHERE id = ${i.id} RETURNING *`);
     }
-    function recordScreened(t, i, verdict) {
-        return record(t, i, verdict.hold ? 'held' : 'filtered', { role: 'filter', reason: 'blocked_words' });
+    async function recordScreened(t, i, verdict) {
+        return await record(t, i, verdict.hold ? 'held' : 'filtered', { role: 'filter', reason: 'blocked_words' });
     }
 
     /** Who is acting: { role, actor } for the creator, a moderator or a granted service; else null. */

@@ -112,11 +112,11 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
     }
     r.get('/receipts/erase', withViewer, async (req, res) => {
         if (!req.viewer) return res.redirect(`/auth/login?next=${encodeURIComponent('/receipts/erase')}`);
-        return renderErase(req, res);
+        return await renderErase(req, res);
     });
     r.post('/receipts/erase', withViewer, form, async (req, res) => {
         if (!req.viewer) return res.redirect(303, `/auth/login?next=${encodeURIComponent('/receipts/erase')}`);
-        if (!csrfOk(req) || !bool(req.body.confirm)) return renderErase(req, res, 403);
+        if (!csrfOk(req) || !bool(req.body.confirm)) return await renderErase(req, res, 403);
         await interactions.erase(req.viewer.subject);
         return res.redirect(303, `/receipts?done=${encodeURIComponent('Your data was erased from your tips')}`);
     });
@@ -163,21 +163,21 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
     r.get('/dashboard', withViewer, async (req, res) => {
         if (!req.viewer) return res.redirect(`/auth/login?next=${encodeURIComponent('/dashboard')}`);
         // Only our own confirmations are shown: a crafted ?done= link cannot put words on the page.
-        return renderDashboard(req, res, { flash: FLASH.has(String(req.query.done || '')) ? String(req.query.done) : null });
+        return await renderDashboard(req, res, { flash: FLASH.has(String(req.query.done || '')) ? String(req.query.done) : null });
     });
 
     /** A dashboard form action: sign-in + anti-forgery, errors re-render the dashboard. */
     function action(path, fn) {
         r.post(path, withViewer, form, async (req, res) => {
             if (!req.viewer) return res.redirect(`/auth/login?next=${encodeURIComponent('/dashboard')}`);
-            if (!csrfOk(req)) return renderDashboard(req, res, { error: 'That form expired. Please try again.', status: 403 });
+            if (!csrfOk(req)) return await renderDashboard(req, res, { error: 'That form expired. Please try again.', status: 403 });
             try {
                 const p = await ensureProfile(req);
                 const out = await fn(req, p);
                 if (out && out.render) return out.render(res);
                 return res.redirect(303, `/dashboard?done=${encodeURIComponent((out && out.done) || 'Saved')}`);
             } catch (e) {
-                if (e instanceof TipsError) return renderDashboard(req, res, { error: e.detail || e.message, status: e.status >= 500 ? 500 : 400 });
+                if (e instanceof TipsError) return await renderDashboard(req, res, { error: e.detail || e.message, status: e.status >= 500 ? 500 : 400 });
                 throw e;
             }
         });
@@ -335,19 +335,19 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
         if (!req.viewer) return res.redirect(`/auth/login?next=${encodeURIComponent(req.originalUrl)}`);
         const { p, actor } = await modAccess(req);
         if (!p || !actor) return notFound(req, res);
-        return renderModerate(req, res, p);
+        return await renderModerate(req, res, p);
     });
     r.post('/moderate/:handle/:id/:act(hide|restore)', withViewer, form, async (req, res) => {
         if (!req.viewer) return res.redirect(303, `/auth/login?next=${encodeURIComponent(`/moderate/${req.params.handle}`)}`);
         const { p, actor } = await modAccess(req);
         if (!p || !actor) return notFound(req, res);
-        if (!csrfOk(req)) return renderModerate(req, res, p, { error: 'That form expired. Please try again.', status: 403 });
+        if (!csrfOk(req)) return await renderModerate(req, res, p, { error: 'That form expired. Please try again.', status: 403 });
         const i = await interactions.get(db, req.params.id);
         if (!i || i.creator_subject !== p.creator_subject) return notFound(req, res);
         try {
             await moderation[req.params.act](i, { ...actor, reason: req.body.reason });
         } catch (e) {
-            if (e instanceof TipsError) return renderModerate(req, res, p, { error: e.detail || e.message, status: 400 });
+            if (e instanceof TipsError) return await renderModerate(req, res, p, { error: e.detail || e.message, status: 400 });
             throw e;
         }
         return res.redirect(303, `/moderate/${encodeURIComponent(p.handle)}?done=${req.params.act === 'hide' ? 'Hidden' : 'Shown'}`);
@@ -371,7 +371,7 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
             body: pages.creatorPage({ profile: p, goals: list, viewer: req.viewer, csrf, idem: idem(), values, providers, error, ownerPreview: !p.page_enabled }),
         }), status, p.page_enabled ? {} : { 'X-Robots-Tag': 'noindex, nofollow' });
     }
-    r.get('/:handle', withViewer, (req, res, next) => (profiles.normalizeHandle(req.params.handle) ? creatorView(req, res) : next()));
+    r.get('/:handle', withViewer, async (req, res, next) => (profiles.normalizeHandle(req.params.handle) ? await creatorView(req, res) : next()));
     r.get('/:handle/goals', withViewer, async (req, res, next) => {
         const p = await profiles.byHandle(db, req.params.handle);
         if (!p) return next();
@@ -407,7 +407,7 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
             kind: b.kind, amount: b.amount, message: b.message, tts_text: b.tts_text, tts_voice: b.tts_voice, media_url: b.media_url, goal_id: b.goal_id, pay_with: b.pay_with,
             supporter_name: b.supporter_name, anonymous: bool(b.anonymous), hide_amount: bool(b.hide_amount), private_message: bool(b.private_message),
         };
-        if (!csrfOk(req)) return creatorView(req, res, { values, error: 'That form expired. Please send it again.', status: 403 });
+        if (!csrfOk(req)) return await creatorView(req, res, { values, error: 'That form expired. Please send it again.', status: 403 });
         const owner = req.viewer.subject === p.creator_subject;
         if (!p.page_enabled && !owner) return notFound(req, res);
         const key = /^form-[A-Za-z0-9_-]{8,40}$/.test(String(b.idem || '')) ? `form:${req.viewer.subject}:${b.idem}` : null;
@@ -426,7 +426,7 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
                     const out = await interactions.transfer(i);
                     if (out.refused) {
                         const msg = out.refused === 'billing.insufficient_funds' ? 'Your Vibes balance is too low for this. Pay by checkout instead, or top up on OpenVibe.Live.' : `Billing refused this tip (${out.refused}).`;
-                        return creatorView(req, res, { values, error: msg, status: 409 });
+                        return await creatorView(req, res, { values, error: msg, status: 409 });
                     }
                 } else {
                     i = (await interactions.startCheckout(i, { provider: b.provider })).interaction;
@@ -435,7 +435,7 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
             }
             return res.redirect(303, `/receipts/${i.id}`);
         } catch (e) {
-            if (e instanceof TipsError) return creatorView(req, res, { values, error: e.detail || e.message, status: e.status >= 500 ? 502 : 400 });
+            if (e instanceof TipsError) return await creatorView(req, res, { values, error: e.detail || e.message, status: e.status >= 500 ? 502 : 400 });
             return next(e);
         }
     });

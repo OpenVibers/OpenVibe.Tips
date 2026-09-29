@@ -66,8 +66,8 @@ async function main() {
         if (valkey) await valkey.close().catch(() => {});
         process.exit(0);
     }
-    process.on('SIGTERM', () => { shutdown('SIGTERM'); });
-    process.on('SIGINT', () => { shutdown('SIGINT'); });
+    process.on('SIGTERM', async () => { await shutdown('SIGTERM'); });
+    process.on('SIGINT', async () => { await shutdown('SIGINT'); });
 }
 
 main().catch((e) => {

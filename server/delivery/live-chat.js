@@ -43,7 +43,7 @@ function createLiveChatAdapter(config, { fetchImpl = globalThis.fetch, tokenClie
         } catch (e) {
             throw new Error(`Live unreachable: ${e.message}`);
         }
-        if (res.status === 401 && !retried) { client().invalidate(); return deliver(job, true); }
+        if (res.status === 401 && !retried) { client().invalidate(); return await deliver(job, true); }
         const body = await res.json().catch(() => null);
         if (!res.ok) {
             const e = new Error(`Live ${res.status}: ${(body && (body.detail || body.error || body.code)) || 'refused'}`);

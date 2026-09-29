@@ -141,7 +141,7 @@ function createGoals(ctx) {
             const id = prefixedId('tgoal', ctx.now());
             await t.exec(sql`INSERT INTO tip_goals (id, creator_subject, title, description, target_amount, image_url, status, sort_order, created_at, updated_at)
                 VALUES (${id}, ${creator}, ${f.title}, ${f.description || null}, ${f.target_amount}, ${f.image_url || null}, 'active', ${f.sort_order || 0}, ${at}, ${at})`);
-            return changed(t, id, 'created');
+            return await changed(t, id, 'created');
         });
     }
 
@@ -150,23 +150,23 @@ function createGoals(ctx) {
         if (goal.status !== 'active') fail(409, 'tips.goal_closed', 'a closed goal cannot be edited');
         if (input.revision != null && Number(input.revision) !== goal.revision) fail(409, 'tips.revision_conflict', `the goal is at revision ${goal.revision}`);
         const f = fields(input, true);
-        if (!Object.keys(f).length) return present(db, goal);
+        if (!Object.keys(f).length) return await present(db, goal);
         return ctx.tx(async (t) => {
             const cur = await t.one(sql`SELECT * FROM tip_goals WHERE id = ${goal.id} FOR UPDATE`);
             if (cur.status !== 'active') fail(409, 'tips.goal_closed', 'a closed goal cannot be edited');
             if (input.revision != null && Number(input.revision) !== cur.revision) fail(409, 'tips.revision_conflict', `the goal is at revision ${cur.revision}`);
             await t.exec(sql`UPDATE tip_goals SET ${sql.set(f)} WHERE id = ${goal.id}`);
             await markReached(t, goal.id);
-            return changed(t, goal.id, 'updated');
+            return await changed(t, goal.id, 'updated');
         });
     }
 
     async function close(goal) {
-        if (goal.status === 'closed') return present(db, goal);
+        if (goal.status === 'closed') return await present(db, goal);
         return ctx.tx(async (t) => {
             const n = await t.exec(sql`UPDATE tip_goals SET status = 'closed', closed_at = ${iso(ctx.now())} WHERE id = ${goal.id} AND status = 'active'`);
-            if (!n) return present(t, await get(t, goal.id));
-            return changed(t, goal.id, 'closed');
+            if (!n) return await present(t, await get(t, goal.id));
+            return await changed(t, goal.id, 'closed');
         });
     }
 
@@ -208,7 +208,7 @@ function createGoals(ctx) {
         // The overlay's goal update names the supporter as the alert does; not when the amount is hidden
         // (the bar's jump would otherwise pin the amount on them), nor while moderation holds it.
         const by = interaction.hide_amount || (interaction.moderation && interaction.moderation !== 'visible') ? null : publicView(interaction, { filter }).supporter_name;
-        return changed(t, g.id, reachedNow ? 'reached' : 'contribution', { interactionId: interaction.id, by });
+        return await changed(t, g.id, reachedNow ? 'reached' : 'contribution', { interactionId: interaction.id, by });
     }
 
     /** Inside the reversal transaction: take `bits` back off every goal the interaction counted toward. */

@@ -142,7 +142,7 @@ function createOverlays(ctx) {
         return ctx.tx(async (t) => {
             const c = await t.one(sql`SELECT * FROM overlay_configs WHERE id = ${config.id} FOR UPDATE`);
             if (input.revision != null && Number(input.revision) !== c.revision) fail(409, 'tips.revision_conflict', `the config is at revision ${c.revision}`);
-            return changeConfig(t, c, input);
+            return await changeConfig(t, c, input);
         });
     }
     async function changeConfig(t, c, input) {
@@ -189,9 +189,9 @@ function createOverlays(ctx) {
     }
 
     /** Inside the settlement transaction (or a simulation). `filter`: the creator's word filter. */
-    function addAlert(t, interaction, filter) {
+    async function addAlert(t, interaction, filter) {
         const payload = publicView(interaction, { at: iso(ctx.now()), filter });
-        return insertDelivery(t, interaction.creator_subject, 'alert', { interactionId: interaction.id, payload, test: interaction.test, dedupe: `alert:${interaction.id}` });
+        return await insertDelivery(t, interaction.creator_subject, 'alert', { interactionId: interaction.id, payload, test: interaction.test, dedupe: `alert:${interaction.id}` });
     }
 
     /**
@@ -215,7 +215,7 @@ function createOverlays(ctx) {
         await t.exec(sql`UPDATE overlay_deliveries d SET payload = v.payload
             FROM jsonb_to_recordset(${sql.json(updates)}) AS v(seq bigint, payload jsonb) WHERE d.seq = v.seq`);
     }
-    const refreshInteraction = (t, interaction, filter) => refreshInteractions(t, [interaction], new Map([[interaction.creator_subject, filter]]));
+    const refreshInteraction = async (t, interaction, filter) => await refreshInteractions(t, [interaction], new Map([[interaction.creator_subject, filter]]));
 
     /** Inside a transaction: a moderator hid the interaction. Its alert is never sent or replayed again. */
     async function retract(t, interaction, filter) {
@@ -230,8 +230,8 @@ function createOverlays(ctx) {
         await refreshInteraction(t, interaction, filter);
     }
 
-    function addGoalDelivery(t, creator, goalView, { reason, interactionId, by, dedupe, test = false }) {
-        return insertDelivery(t, creator, 'goal', { interactionId, goalId: goalView.id, payload: { goal: goalView, reason, by: by || null, test }, test, dedupe });
+    async function addGoalDelivery(t, creator, goalView, { reason, interactionId, by, dedupe, test = false }) {
+        return await insertDelivery(t, creator, 'goal', { interactionId, goalId: goalView.id, payload: { goal: goalView, reason, by: by || null, test }, test, dedupe });
     }
 
     /**

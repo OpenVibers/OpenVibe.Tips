@@ -22,7 +22,6 @@
  *   overlay_configs         alert / goal overlay settings
  *   overlay_deliveries      what overlays were sent (monotonic seq per creator, replayable)
  *   interaction_effects     the retryable delivery work of an interaction (chat line, TTS, media, overlay)
- *   migration_maps          legacy (Live) row → Tips entity, with held/excluded reasons
  *
  * Supporting: overlay_tokens (hashed, scoped, revocable), tip_moderators / _invites / _moderation_log,
  * api_idempotency, import_runs, tips_event_outbox + tips_event_inbox (openvibe-sdk outbox and inbox).

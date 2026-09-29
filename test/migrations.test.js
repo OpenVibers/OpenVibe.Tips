@@ -1,18 +1,15 @@
 'use strict';
 // migrations/ (ADR-035, ADR-028): the files parse with their phase, apply in order, and apply again
-// without change; the schema carries every column the SQLite release had (nothing lost in the import);
-// every query shape the code runs can be served by an index; and no runtime file loads better-sqlite3.
+// without change; a contract migration drops what an earlier expand left behind; and every query shape
+// the code runs can be served by an index.
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const Database = require('better-sqlite3');
 const { createDb, sql } = require('openvibe-sdk/db');
 const { MIGRATIONS } = require('../server/db');
-const { TABLES } = require('../scripts/migrate-to-postgres');
 const { check, done } = require('./helpers/app');
 
 const quiet = { log() {} };
-const ROOT = path.join(__dirname, '..');
 
 /** The migration files as the SDK reads them: NNNN_name.sql with a phase header (and after: for a contract). */
 function parse(dir) {
@@ -38,15 +35,22 @@ function parse(dir) {
     });
 
     await check('they apply once, in order, and a second run changes nothing', async () => {
-        const first = await db.migrate({ dir: MIGRATIONS, log: quiet });
+        const first = await db.migrate({ dir: MIGRATIONS, log: quiet, windowDays: 0 });
         assert.deepStrictEqual(first.applied.map((m) => m.id), parse(MIGRATIONS).map((m) => m.id));
         const schema = async () => db.many(sql`SELECT table_name, column_name, data_type, is_nullable, column_default FROM information_schema.columns
             WHERE table_schema = 'public' ORDER BY table_name, ordinal_position`);
         const before = await schema();
-        const second = await db.migrate({ dir: MIGRATIONS, log: quiet });
+        const second = await db.migrate({ dir: MIGRATIONS, log: quiet, windowDays: 0 });
         assert.deepStrictEqual([second.applied, second.held], [[], []]);
         assert.deepStrictEqual(await schema(), before, 'the schema is the same after a second run');
         assert.strictEqual(await db.value(sql`SELECT count(*) FROM ov_migrations`), parse(MIGRATIONS).length);
+    });
+
+    await check('the contract migration drops the legacy import columns and the map table', async () => {
+        assert.deepStrictEqual(await db.many(sql`SELECT table_name FROM information_schema.columns
+            WHERE table_schema = 'public' AND column_name = 'legacy_source'`), []);
+        assert.deepStrictEqual(await db.many(sql`SELECT table_name FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_name = 'migration_maps'`), []);
     });
 
     await check('every table has a primary key; money and time columns have their types', async () => {
@@ -67,27 +71,6 @@ function parse(dir) {
             assert.strictEqual(await type(t, c), 'jsonb', `${t}.${c}`);
         }
         assert.strictEqual(await type('api_idempotency', 'response'), 'text', 'replayed byte for byte');
-    });
-
-    await check('nothing the SQLite release stored is left behind: every source table and column has a target', async () => {
-        const s = new Database(':memory:');
-        s.exec(fs.readFileSync(path.join(__dirname, 'fixtures', 'sqlite-v3-schema.sql'), 'utf8'));
-        const from = (target) => (TABLES[target] && TABLES[target].from) || target;
-        const targets = new Map();
-        for (const r of await db.many(sql`SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name <> 'ov_migrations'`)) {
-            const src = from(r.table_name);
-            if (!targets.has(src)) targets.set(src, new Set());
-            targets.get(src).add(r.column_name);
-        }
-        const missing = [];
-        for (const { name } of s.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all()) {
-            if (name === 'settings') continue;   // not carried on purpose: ov_migrations records the schema (0001_initial.sql)
-            if (!targets.has(name)) { missing.push(name); continue; }
-            for (const c of s.prepare(`PRAGMA table_info(${name})`).all()) if (!targets.get(name).has(c.name)) missing.push(`${name}.${c.name}`);
-        }
-        s.close();
-        assert.deepStrictEqual(missing, [], 'no table or column dropped (dropColumns stays empty)');
-        assert.ok(Object.values(TABLES).every((o) => !o.dropColumns), 'no dropColumns');
     });
 
     await check('every query shape the code runs can be served by an index (no sequential scan of its table)', async () => {
@@ -125,7 +108,6 @@ function parse(dir) {
             'the weekly prune of stored answers': ['api_idempotency', sql`DELETE FROM api_idempotency WHERE created_at < now()`],
             'an erasure scrubbing outbox copies': ['tips_event_outbox', sql`SELECT id FROM tips_event_outbox WHERE envelope->'subject'->>'type' = 'interaction' AND envelope->'subject'->>'id' = ANY('{a}'::text[])`],
             'the rejected-events count': ['tips_event_outbox', sql`SELECT count(*) FROM tips_event_outbox WHERE rejected_at IS NOT NULL`],
-            'a Live goal through the import map': ['migration_maps', sql`SELECT target_id FROM migration_maps WHERE source = 'live' AND source_table = 'donation_goals' AND source_id = '12'`],
         };
         const scans = [];
         for (const [name, [table, q]] of Object.entries(shapes)) {
@@ -139,21 +121,6 @@ function parse(dir) {
             if (nodes.some((n) => n['Node Type'] === 'Seq Scan' && n['Relation Name'] === table)) scans.push(name);
         }
         assert.deepStrictEqual(scans, []);
-    });
-
-    await check('no runtime file loads better-sqlite3 (only the import tools may)', async () => {
-        const offenders = [];
-        const walk = (dir) => {
-            for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-                const p = path.join(dir, e.name);
-                if (e.isDirectory()) walk(p);
-                else if (e.name.endsWith('.js') && /require\(['"]better-sqlite3['"]\)|\.prepare\(|db\.transaction\(/.test(fs.readFileSync(p, 'utf8').replace(/(live|bdb|snap)\.prepare\(/g, ''))) offenders.push(path.relative(ROOT, p));
-            }
-        };
-        walk(path.join(ROOT, 'server'));
-        assert.deepStrictEqual(offenders, []);
-        const loaders = fs.readdirSync(path.join(ROOT, 'scripts')).filter((f) => /require\(['"]better-sqlite3['"]\)/.test(fs.readFileSync(path.join(ROOT, 'scripts', f), 'utf8')));
-        assert.deepStrictEqual(loaders, ['import-live.js'], "the Live import reads Live's and Billing's snapshot files; migrate-to-postgres.js reads Tips' through importSqlite");
     });
 
     await db.close();

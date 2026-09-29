@@ -403,9 +403,9 @@ function v1Router({ domain, apiAuth, limits }) {
 
 /** Async-safe handler: TipsError → problem+json; anything else → 500. */
 function wrap(fn) {
-    return (req, res, next) => {
+    return async (req, res, next) => {
         try {
-            const p = fn(req, res, next);
+            const p = await fn(req, res, next);
             if (p && typeof p.catch === 'function') p.catch((e) => sendError(req, res, e));
         } catch (e) { sendError(req, res, e); }
     };

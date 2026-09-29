@@ -72,17 +72,15 @@ const { boot, check, done } = require('./helpers/app');
         assert.strictEqual(totals.settled_via_billing, 0);
     });
 
-    await check('the goal the tip asked for: a Tips goal id, or a Live goal id through the import map', async () => {
+    await check('the goal the tip asked for: a Tips goal id', async () => {
         const a = (await t.call('POST', '/api/v1/goals', { user: alex, body: { title: 'Desk', target_amount: 900 } })).json.goal;
         const b = (await t.call('POST', '/api/v1/goals', { user: alex, body: { title: 'Chair', target_amount: 900 } })).json.goal;
         await t.deliver(receipt({ provider_event_id: 'ext-goal-tips', amount_cents: 100, value_bits: 100, app_purpose: `goal:${a.id}` }));
-        await t.db.exec(`INSERT INTO migration_maps (source, source_table, source_id, target_type, target_id, status, run_id, created_at, updated_at)
-            VALUES ('live', 'donation_goals', '12', 'goal', $1, 'imported', 'imp_test', $2, $2)`, [b.id, new Date().toISOString()]);
-        await t.deliver(receipt({ provider_event_id: 'ext-goal-live', amount_cents: 200, value_bits: 200, app_purpose: 'goal:12' }));
+        await t.deliver(receipt({ provider_event_id: 'ext-goal-other', amount_cents: 200, value_bits: 200, app_purpose: `goal:${b.id}` }));
         await t.deliver(receipt({ provider_event_id: 'ext-goal-none', amount_cents: 300, value_bits: 300 }));
         assert.strictEqual((await domain.goals.present(t.db, await domain.goals.get(t.db, a.id))).current_amount, 100);
         assert.strictEqual((await domain.goals.present(t.db, await domain.goals.get(t.db, b.id))).current_amount, 200);
-        assert.strictEqual(await t.db.value('SELECT count(*) FROM tip_goal_contributions WHERE interaction_id = $1', [(await byRef('ext-goal-none')).id]), 0, 'several active goals and no pick: none (Live\'s rule)');
+        assert.strictEqual(await t.db.value('SELECT count(*) FROM tip_goal_contributions WHERE interaction_id = $1', [(await byRef('ext-goal-none')).id]), 0, 'several active goals and no pick: none');
     });
 
     await check('anonymous: no donor name; a creator with no tip page is still announced', async () => {

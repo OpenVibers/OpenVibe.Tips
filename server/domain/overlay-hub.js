@@ -109,7 +109,7 @@ function createOverlayHub({ valkey = null, pushNew, heartbeatMs, now = () => Dat
 
     /** Run fn for a client after whatever it is already doing (its pushes never interleave). */
     function queue(client, fn) {
-        client.chain = client.chain.then(() => (client.closed ? null : fn())).catch((e) => log.warn('[Tips] overlay push:', e.message));
+        client.chain = client.chain.then(async () => (client.closed ? null : await fn())).catch((e) => log.warn('[Tips] overlay push:', e.message));
         return client.chain;
     }
     /** New deliveries for this client: coalesced, so a burst of notifications reads once. */
@@ -214,7 +214,7 @@ function createOverlayHub({ valkey = null, pushNew, heartbeatMs, now = () => Dat
         config: (creator, config) => publish(creator, { t: 'config', config }),
         revoke: (creator, tokenId) => publish(creator, { t: 'revoke', token_id: tokenId }),
         /** Open streams of this creator's overlays, in every process. */
-        connected: (creator) => slots('count', creator),
+        connected: async (creator) => await slots('count', creator),
         closeAll() { for (const entry of [...creators.values()]) for (const c of [...entry.clients]) detach(c); },
         async close() { this.closeAll(); await ps.close(); },
     };

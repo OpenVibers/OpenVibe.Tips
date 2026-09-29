@@ -19,7 +19,7 @@ function fail(status, code, detail, extra) { throw new TipsError(status, code, d
 const prefixedId = (prefix, ms = Date.now()) => `${prefix}_${ids.ulid(ms)}`;
 const iso = (ms) => new Date(ms).toISOString();
 const sha256 = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
-/** JSON text (a SQLite snapshot's column) → value, or `d`. PostgreSQL jsonb columns come back parsed. */
+/** JSON text → value, or `d`. PostgreSQL jsonb columns come back parsed. */
 const json = (v, d) => { if (v == null || v === '') return d; try { return JSON.parse(v); } catch { return d; } };
 
 function positiveInt(v, field, max) {
@@ -33,8 +33,8 @@ function positiveInt(v, field, max) {
 // from the creator's filter and turn text around on stream (docs/threat-review.md).
 const INVISIBLE = /[\u00AD\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/g;
 
-// PostgreSQL stores no NUL character in text or jsonb, and jsonb refuses an unpaired surrogate (SQLite
-// took both): every text from outside goes through storable() before it reaches the database.
+// PostgreSQL stores no NUL character in text or jsonb, and jsonb refuses an unpaired surrogate:
+// every text from outside goes through storable() before it reaches the database.
 const NUL = /\u0000/g;
 /** A string PostgreSQL can store: NUL characters dropped, unpaired surrogates replaced by U+FFFD. */
 const storable = (v) => String(v).toWellFormed().replace(NUL, '');
