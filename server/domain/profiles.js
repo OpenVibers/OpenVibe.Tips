@@ -26,7 +26,7 @@ const filterLib = require('./filter');
 const HANDLE_RE = /^[a-z0-9][a-z0-9_.-]{0,39}$/;
 // Paths the site itself uses; no creator page can take them.
 const RESERVED = new Set(['api', 'auth', 'overlay', 'internal', 'dashboard', 'receipts', 'assets', 'css', 'js', 'img', 'favicon.svg',
-    'robots.txt', 'sitemap.xml', 'release.json', 'manifest.webmanifest', 'terms', 'privacy', 'dmca', 'tos', 'about', 'help', 'goals', 'tips', 'admin', 'www',
+    'robots.txt', 'sitemap.xml', 'llms.txt', 'release.json', 'manifest.webmanifest', 'terms', 'privacy', 'dmca', 'tos', 'about', 'help', 'goals', 'tips', 'admin', 'www',
     'moderate', 'supporters', 'metrics']);
 const VOICES = ['gary', 'brian', 'amy', 'emma', 'joey', 'justin', 'matthew', 'salli', 'kimberly', 'kendra', 'ivy', 'joanna'];
 

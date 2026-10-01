@@ -69,13 +69,27 @@ const { boot, check, done } = require('./helpers/app');
         assert.match(own.text, /Your page is switched off/);
     });
 
-    await check('robots.txt and sitemap.xml list only switched-on pages', async () => {
+    await check('robots.txt, sitemap.xml and llms.txt: the shared seo kit, listing only switched-on pages', async () => {
         const robots = await get('/robots.txt');
-        assert.match(robots.text, /Disallow: \/dashboard/);
-        assert.match(robots.text, /Disallow: \/overlay\//);
+        assert.strictEqual(robots.status, 200);
+        assert.match(robots.headers.get('content-type'), /^text\/plain/);
+        assert.match(robots.text, /^Allow: \/$/m);
+        for (const path of ['/dashboard', '/receipts', '/overlay/', '/moderate/', '/auth/', '/api/', '/internal/']) {
+            assert.ok(robots.text.includes(`Disallow: ${path}\n`), `robots keeps ${path} private`);
+        }
+        assert.match(robots.text, /Sitemap: http:\/\/tips\.test\/sitemap\.xml\n/, 'robots names the sitemap');
         const sm = await get('/sitemap.xml');
+        assert.strictEqual(sm.status, 200);
+        assert.match(sm.headers.get('content-type'), /^application\/xml/);
+        assert.match(sm.text, /<loc>http:\/\/tips\.test\/<\/loc>/, 'the sitemap lists the home URL');
         assert.match(sm.text, /<loc>http:\/\/tips\.test\/alex<\/loc>/);
+        assert.match(sm.text, /<lastmod>\d{4}-\d{2}-\d{2}<\/lastmod>/, 'every url carries a real lastmod');
         assert.ok(!sm.text.includes('/bob<'));
+        const llms = await get('/llms.txt');
+        assert.strictEqual(llms.status, 200);
+        assert.match(llms.headers.get('content-type'), /^text\/plain/);
+        assert.match(llms.text, /^# /, 'llms.txt starts with a markdown heading');
+        assert.match(llms.text, /\[Creators on OpenVibe\.Tips\]\(http:\/\/tips\.test\/\)/, 'llms.txt lists the main public pages');
     });
 
     await check('tipping without JavaScript: sign-in first, then a form post settles and lands on the receipt', async () => {
