@@ -39,8 +39,8 @@
  * but the creator and granted services.
  */
 const express = require('express');
-const { http } = require('openvibe-contracts');
-const { TipsError, fail, userSubject, displayName, inputError } = require('../util');
+const svc = require('openvibe-sdk/service');
+const { fail, userSubject, displayName, inputError } = require('../util');
 const { idempotent } = require('./idempotency');
 
 const CAP = {
@@ -401,24 +401,17 @@ function v1Router({ domain, apiAuth, limits }) {
     return r;
 }
 
-/** Async-safe handler: TipsError → problem+json; anything else → 500. */
-function wrap(fn) {
-    return async (req, res, next) => {
-        try {
-            const p = await fn(req, res, next);
-            if (p && typeof p.catch === 'function') p.catch((e) => sendError(req, res, e));
-        } catch (e) { sendError(req, res, e); }
-    };
-}
+/**
+ * Async-safe handler: TipsError → problem+json; anything else → 500 tips.internal with 'internal error'.
+ * Built from openvibe-sdk/service (plan T1) with Tips' own options — the fallback code and detail, and
+ * `extra` nested as { details } below 500, are the kit's internalCode / internalDetail / extra: 'details';
+ * `map: inputError` keeps the database-refusal mapping (a value PostgreSQL cannot store → 422
+ * tips.invalid_input). The exported signatures stay (fn) / (req, res, e), so no call site moves.
+ */
+const TIPS_ERRORS = { name: 'Tips', extra: 'details', internalCode: 'tips.internal', internalDetail: 'internal error', map: inputError };
 
-function sendError(req, res, e) {
-    if (res.headersSent) return;
-    e = inputError(e) || e;
-    if (e instanceof TipsError) {
-        return http.sendProblem(res, e.status, e.code, { detail: e.detail || e.message, ctx: req.ov, extra: e.extra && e.status < 500 ? { details: e.extra } : undefined });
-    }
-    console.error('[Tips] unexpected error:', e);
-    return http.sendProblem(res, 500, 'tips.internal', { detail: 'internal error', ctx: req.ov });
-}
+const wrap = (fn) => svc.wrap(fn, TIPS_ERRORS);
+
+const sendError = (req, res, e) => svc.sendError(res, req, e, undefined, TIPS_ERRORS);
 
 module.exports = { v1Router, wrap, sendError, CAP };
