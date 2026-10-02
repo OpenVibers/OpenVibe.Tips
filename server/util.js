@@ -3,16 +3,12 @@
 /** Small shared pieces: ids, time, the error type, input checks. */
 const crypto = require('crypto');
 const { ids, validate } = require('openvibe-contracts');
+const { createServiceError } = require('openvibe-sdk/service');
 
-class TipsError extends Error {
-    constructor(status, code, detail, extra) {
-        super(detail || code);
-        this.status = status;
-        this.code = code;
-        this.detail = detail;
-        this.extra = extra;
-    }
-}
+// openvibe-sdk/service (plan T1): the kit's error class with Tips' name. Same constructor
+// (status, code, detail, extra) and same fields, so `instanceof TipsError`, fail() and every
+// call site stay exactly as they were.
+const TipsError = createServiceError('TipsError');
 
 function fail(status, code, detail, extra) { throw new TipsError(status, code, detail, extra); }
 

@@ -21,8 +21,29 @@ const { openDb, migrate } = require('./db');
 const { createApp } = require('./app');
 const { createValkey } = require('openvibe-sdk/valkey');
 const { createRegistry } = require('openvibe-shared/metrics');
+const { gracefulStop } = require('openvibe-sdk/service');
 
-async function main() {
+/**
+ * The process stop (openvibe-sdk/service, plan T1): the job timers and the relays stop taking new
+ * work (they ran before the old server.close), the HTTP drain runs (defaults 4000/5000), then the
+ * database and Valkey close; past the deadline the process exits 0, as the hand-rolled 5 s timer did.
+ * Exported so a test can inject `exit` and `signals: false`.
+ */
+function createLifecycle({ server, app, timers = [], exit, signals } = {}) {
+    const { db, valkey, domain, keys, outbox } = app.locals;
+    return gracefulStop({
+        name: 'Tips', server, deadlineExitCode: 0, exit, signals,
+        stop: [
+            () => timers.forEach(clearInterval),
+            () => keys.stop(),
+            () => domain.overlays.close(),
+            () => outbox.stop(),
+        ],
+        close: [() => db.close(), () => { if (valkey) return valkey.close(); }],
+    });
+}
+
+async function start() {
     const config = loadConfig();
     const registry = createRegistry();
     const db = openDb(config, { registry });
@@ -51,26 +72,15 @@ async function main() {
     });
     server.keepAliveTimeout = 65_000;
 
-    let closing = false;
-    async function shutdown(signal) {
-        if (closing) return;
-        closing = true;
-        console.log(`[Tips] ${signal} — closing`);
-        setTimeout(() => process.exit(0), 5000).unref();
-        timers.forEach(clearInterval);
-        keys.stop();
-        await domain.overlays.close().catch(() => {});
-        await outbox.stop();
-        await new Promise((resolve) => server.close(resolve));
-        await db.close().catch(() => {});
-        if (valkey) await valkey.close().catch(() => {});
-        process.exit(0);
-    }
-    process.on('SIGTERM', async () => { await shutdown('SIGTERM'); });
-    process.on('SIGINT', async () => { await shutdown('SIGINT'); });
+    createLifecycle({ server, app, timers });
+    return { server, app };
 }
 
-main().catch((e) => {
-    console.error(`[Tips] could not start: ${e.message}`);
-    process.exit(1);
-});
+if (require.main === module) {
+    start().catch((e) => {
+        console.error(`[Tips] could not start: ${e.message}`);
+        process.exit(1);
+    });
+}
+
+module.exports = { start, createLifecycle };
