@@ -23,6 +23,7 @@
  */
 const crypto = require('crypto');
 const ovServe = require('openvibe-shared/serve');
+const cache = require('openvibe-shared/cache-policy');
 const frame = require('openvibe-shared/frame');
 const seo = require('openvibe-shared/seo');
 const express = require('express');
@@ -79,7 +80,7 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
     r.get('/updates', withViewer, (req, res) => html(res, pageFor(req, { canonicalPath: '/updates', title: 'What shipped on OpenVibe.Tips', body: frame.updatesBody({ service: 'tips', siteName: 'OpenVibe.Tips' }) + `<script src="${ovServe.url('shipped.js')}" defer></script>` })));
     // Crawl and machine-readability artifacts, built from openvibe-shared/seo — the same
     // toolkit the other OpenVibe sites use. Public data only, never the viewer.
-    r.get('/robots.txt', (req, res) => res.type('text/plain').set('Cache-Control', 'public, max-age=3600').send(seo.robotsTxt({
+    r.get('/robots.txt', (req, res) => res.type('text/plain').set('Cache-Control', cache.htmlHeaders({ maxAge: 3600 })).send(seo.robotsTxt({
         sitemaps: [`${config.baseUrl}/sitemap.xml`],
         disallow: ['/dashboard', '/receipts', '/overlay/', '/moderate/', '/auth/', '/api/', '/internal/'],
         allowAI: false,
@@ -87,10 +88,10 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
     r.get('/sitemap.xml', async (req, res) => {
         const rows = await db.many(sql`SELECT handle, updated_at FROM creator_tip_profiles WHERE page_enabled ORDER BY handle`);
         const urls = [{ loc: `${config.baseUrl}/`, lastmod: BOOT_AT }, ...rows.map((p) => ({ loc: `${config.baseUrl}/${p.handle}`, lastmod: p.updated_at }))];
-        res.type('application/xml').set('Cache-Control', 'public, max-age=900').send(seo.sitemapXml(urls));
+        res.type('application/xml').set('Cache-Control', cache.htmlHeaders({ maxAge: 900 })).send(seo.sitemapXml(urls));
     });
     // /llms.txt (llmstxt.org): a plain-markdown map of the site for language-model crawlers.
-    r.get('/llms.txt', (req, res) => res.type('text/plain').set('Cache-Control', 'public, max-age=3600').send(seo.llmsTxt({
+    r.get('/llms.txt', (req, res) => res.type('text/plain').set('Cache-Control', cache.htmlHeaders({ maxAge: 3600 })).send(seo.llmsTxt({
         name: 'OpenVibe.Tips',
         summary: 'OpenVibe.Tips: creator support — tips, goals, paid messages, TTS and media requests, and overlays.',
         details: 'A creator page lists the goals and a tip form that works without JavaScript; tips settle through Billing, and Tips owns the interaction, the goals and the overlay alerts. The home page lists creators whose pages are switched on. Reading any public page needs no account; tipping needs a signed-in supporter, and the dashboard, receipts, moderation, overlays, sign-in and the API are per-person and never listed here.',
