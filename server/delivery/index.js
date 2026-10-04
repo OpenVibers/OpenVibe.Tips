@@ -10,9 +10,9 @@
  *               text, tts?: { text, voice }, media?: { url }, highlight_seconds?, target?: EntityRef }
  *
  * Adapters (TIPS_CHAT_ADAPTER):
- *   live-chat  OpenVibe.Live's /internal/tips/deliveries — the existing donation path (broadcast to the
- *              channel room + global, saved as a 'donation' chat message, the alert sound); see
- *              docs/live-patch.diff. Used until OpenVibe.Chat exposes a public paid-message API.
+ *   chat       OpenVibe.Chat's typed ingress (/internal/chat/messages and /internal/chat/events):
+ *              a 'donation' line in the creator's channel and global chat, the alert sound, TTS read
+ *              aloud; see ./chat.js
  *   test       records jobs in memory (development, tests, and simulations when no chat target should
  *              hear a test)
  *   none       no chat effects are created at all
@@ -20,7 +20,7 @@
  * A delivery failure is retried with backoff and finally recorded as failed on the effect; it never
  * touches the interaction's payment state (the money is Billing's and already settled).
  */
-const { createLiveChatAdapter } = require('./live-chat');
+const { createChatAdapter } = require('./chat');
 
 function createTestAdapter({ name = 'test' } = {}) {
     const jobs = [];
@@ -43,7 +43,7 @@ function createTestAdapter({ name = 'test' } = {}) {
 
 function createAdapters(config, { fetchImpl } = {}) {
     const adapters = { test: createTestAdapter() };
-    if (config.chat.adapter === 'live-chat') adapters['live-chat'] = createLiveChatAdapter(config, { fetchImpl });
+    if (config.chat.adapter === 'chat') adapters.chat = createChatAdapter(config, { fetchImpl });
     return adapters;
 }
 

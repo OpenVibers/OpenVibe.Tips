@@ -6,7 +6,8 @@ This is a written internal review, not an independent audit. The roadmap's gate 
 outside review before launch.
 
 **Method:** we read the code paths end to end (`server/`, `public/js/overlay.js`,
-`deploy/nginx/openvibe.tips.conf`), and Live's `/internal/tips/deliveries` where Tips depends on it.
+`deploy/nginx/openvibe.tips.conf`), and OpenVibe.Chat's `/internal/chat/messages` and `/internal/chat/events`
+where Tips depends on them.
 Every claim below is backed by a test in `test/` or names the line that enforces it. Nothing was run
 against production. Production runs Tips on loopback only, with an empty database, so none of these
 issues was ever reachable from the internet.
@@ -22,7 +23,7 @@ issues was ever reachable from the internet.
 | OBS / an overlay client | an overlay token in the URL | `/overlay/<token>`, `/events` (SSE), `/state` |
 | First-party service | a Network service token with `tips.*` capabilities | `/api/v1` routes, one capability each |
 | OpenVibe.Billing (via Events) | the webhook signing secret | `POST /internal/events` on loopback |
-| OpenVibe.Live | Tips' service token (`live.tips_delivery.write`) | Tips calls Live; Live never calls Tips |
+| OpenVibe.Chat | Tips' service token (`chat.message.send`, `chat.event.publish`) | Tips calls Chat; Chat never calls Tips |
 
 **What we protect:**
 
@@ -52,7 +53,7 @@ documented), **elsewhere** (the fix belongs to another repository).
 | 12 | Replay | Webhook, API, form, overlay and event replays. | **holds** | See [Replay](#replay). `test/settlement.test.js`, `test/overlays.test.js`, `test/api.test.js`, `test/pages.test.js` |
 | 13 | Privacy | A hidden amount still moves a public goal bar by that amount. | **residual** | Stated on the tip form. The goal update of such a tip names nobody. |
 | 14 | Privacy | Internal events carry the amount, and the supporter's subject when the tip is not anonymous. | **residual** | The events are `internal` visibility. Goals and reconciliation need the amount. Erasure redacts them in Events. |
-| 15 | Privacy, chat | Live's delivery route turns a hidden amount (`null`) into a donation event of 0 Vibes, and Live's chat renders it as "donated 0 Vibes". Live also remembers delivery ids in memory only. | **elsewhere** (Live) | The job carries `privacy.hide_amount`. Live should render a line with no amount. |
+| 15 | Privacy, chat | A tip with a hidden amount is posted to Chat as a donation line whose text has no amount and whose `metadata.amount` is `null`. Chat persists the delivery key. | **elsewhere** (Chat) | Chat should render the line's text, never `metadata.amount` as 0. |
 | 16 | Overlays | Overlay tokens never expire. | **residual** | The creator can revoke a token, and revocation closes open streams at once. Every token records when it was last used. |
 | 17 | Rate limits | Tips has no rate limiting of its own. | **residual** | The nginx reference config limits `/api/`, `/auth/` and the form posts. Money limits paid actions, and fixes 3 and 4 bound the rest. |
 | 18 | Paid-message abuse | Supporter names are still free text: only an exact copy of the creator's name is refused. Donor names that Billing relays from PowerChat are not checked. | **residual** | The word filter and moderation cover names. |
@@ -101,7 +102,7 @@ documented), **elsewhere** (the fix belongs to another repository).
 - **Injection.**
   - Pages escape everything with `esc()`, and JSON-LD escapes `<`.
   - The overlay uses `textContent`.
-  - Chat lines are plain text that Tips builds. Live renders them with its own escaping, which is Live's
+  - Chat lines are plain text that Tips builds. Chat renders them with its own escaping, which is Chat's
     responsibility.
 - **Impersonation and Unicode tricks:** fixed (#5 and #6). Long runs of combining marks are cut at display.
 - **Media requests** cannot be private and go through moderation like paid messages. The URL is shown
@@ -109,8 +110,8 @@ documented), **elsewhere** (the fix belongs to another repository).
 
 ## TTS
 
-- Tips never calls a speech provider. It hands text to Live's `synthesizeAndBroadcastTTS`, and to
-  OpenVibe.Chat when an adapter exists.
+- Tips never calls a speech provider. It hands text to OpenVibe.Chat (a `tts` line with `tts: { voice }`),
+  which synthesizes and broadcasts it.
 - The text passes through `cleanTts`, which removes control and invisible characters, turns links into
   "link" and strips markup (#7). The creator's filter then drops blocked words from it rather than
   starring them. Voices come from an allowlist.
@@ -204,8 +205,7 @@ tests validate them against the drafts.
 
 ## Follow-ups
 
-1. **Live:** render a tip whose amount is hidden (`privacy.hide_amount`, `interaction.amount: null`)
-   without an amount, and persist the delivery idempotency key (#15).
+1. **Chat:** render a donation line whose `metadata.amount` is `null` without an amount (#15).
 2. **Contracts:** add the three items above, then register them in `manifests/services/tips.json`.
 3. **Before launch:** get an independent review of this document and the code. Consider optional overlay
    token expiry (#16).

@@ -49,10 +49,12 @@ function loadConfig(env = process.env) {
             internalUrl: trim(env.OV_NETWORK_INTERNAL_URL || 'http://127.0.0.1:4000'),
             issuer: trim(env.OV_NETWORK_ISSUER || networkUrl),
             publicKey: env.OV_NETWORK_PUBLIC_KEY ? env.OV_NETWORK_PUBLIC_KEY.replace(/\\n/g, '\n') : null,
+            // Tips' service tokens for the Network's own API (identity.subject.resolve: a creator's Chat room).
+            audience: env.OV_NETWORK_AUDIENCE || 'openvibe.network',
         },
         audience: env.TIPS_AUDIENCE || 'openvibe.tips',
         // Tips' own client credentials (client `tips` in the Network): service tokens for Billing,
-        // Events and Live (chat delivery); and the OAuth code flow for browser sign-in.
+        // Events, Chat (delivery) and the Network; and the OAuth code flow for browser sign-in.
         oauth: {
             clientId: env.OV_OAUTH_CLIENT_ID || 'tips',
             clientSecret: env.OV_OAUTH_CLIENT_SECRET || '',
@@ -88,13 +90,13 @@ function loadConfig(env = process.env) {
         },
 
         // Chat delivery (paid messages, TTS, media requests, the tip line):
-        //   live-chat  OpenVibe.Live's /internal/tips/deliveries (docs/live-patch.diff)
+        //   chat       OpenVibe.Chat's /internal/chat/messages and /internal/chat/events (server/delivery/chat.js)
         //   test       recorded here, nothing leaves the process (development, tests)
         //   none       no chat effects are created
         chat: {
-            adapter: ['live-chat', 'test', 'none'].includes(chatAdapter) ? chatAdapter : 'none',
-            liveUrl: trim(env.LIVE_INTERNAL_URL || 'http://127.0.0.1:3000'),
-            liveAudience: env.LIVE_AUDIENCE || 'openvibe.live',
+            adapter: ['chat', 'test', 'none'].includes(chatAdapter) ? chatAdapter : 'none',
+            url: trim(env.TIPS_CHAT_URL || 'http://127.0.0.1:4400'),
+            audience: env.CHAT_AUDIENCE || 'openvibe.chat',
             maxAttempts: int(env.TIPS_DELIVERY_MAX_ATTEMPTS, 6),
             backoffMs: list(env.TIPS_DELIVERY_BACKOFF_MS || '2000,10000,60000,300000,900000').map(Number),
         },
