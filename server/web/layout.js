@@ -1,10 +1,10 @@
 'use strict';
 
 /**
- * Page shell for every server-rendered page: full <head> SEO (title, description, canonical,
- * robots, Open Graph), the shared OpenVibe Frame (inline critical canvas + app icon from
- * openvibe-shared, navbar.js from the Network, the SSR footer and a <noscript> navigation), this
- * site's stylesheet and its small progressive script. Everything is useful without JavaScript.
+ * Page shell for every server-rendered page, composed by openvibe-shared/shell: full <head> SEO
+ * (title, description, canonical, robots, Open Graph, JSON-LD), the shared OpenVibe Frame (navbar.js
+ * from the Network, the SSR footer and a <noscript> navigation), plus this site's app icon,
+ * stylesheet, boost marker and its small progressive script. Everything is useful without JavaScript.
  */
 const crypto = require('crypto');
 const ovServe = require('openvibe-shared/serve');
@@ -12,6 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const appIcon = require('openvibe-shared/app-icon');
 const frame = require('openvibe-shared/frame');
+const shell = require('openvibe-shared/shell');
 
 const SITE_NAME = 'OpenVibe.Tips';
 const NETWORK_URL = 'https://openvibe.network';
@@ -49,7 +50,6 @@ function createLayout({ config, release }) {
      *    active ('home'|'dashboard'|'receipts'|'creator'), ogImage, jsonLd (array), viewer
      */
     function page(o) {
-        const title = o.title ? `${o.title} · ${SITE_NAME}` : `${SITE_NAME} — support the creators you watch`;
         const description = (o.description || DEFAULT_DESCRIPTION).replace(/\s+/g, ' ').trim().slice(0, 300);
         const canonical = abs(o.canonicalPath || '/');
         const robots = o.robots || 'index,follow';
@@ -64,56 +64,42 @@ function createLayout({ config, release }) {
             notificationsRealtime: true,   // the bell hears new notifications over OpenVibe.Events (Shared 1.22.0)
         };
         const footer = { service: 'tips', variant: 'full', mount: '#ov-footer', brandName: SITE_NAME, updates: '/updates' };
-        const jsonLd = (o.jsonLd || []).map((x) => `<script type="application/ld+json">${JSON.stringify(x).replace(/</g, '\\u003c')}</script>`).join('\n');
         const who = o.viewer
             ? `<span class="who">Signed in as <b>${esc(o.viewer.name || o.viewer.username || 'you')}</b> · <a href="/auth/logout?next=/">Sign out</a></span>`
             : `<a class="who" href="/auth/login?next=${encodeURIComponent(o.canonicalPath || '/')}">Sign in</a>`;
-        return `<!DOCTYPE html>
-<html lang="en" data-page="${esc(o.active || 'page')}">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${esc(title)}</title>
-<meta name="description" content="${esc(description)}">
-<link rel="canonical" href="${esc(canonical)}">
-<meta name="robots" content="${esc(robots)}">
-<meta name="referrer" content="strict-origin-when-cross-origin">
-<meta property="og:site_name" content="${SITE_NAME}">
-<meta property="og:type" content="${o.ogType || 'website'}">
-<meta property="og:title" content="${esc(o.title || SITE_NAME)}">
-<meta property="og:description" content="${esc(description)}">
-<meta property="og:url" content="${esc(canonical)}">
-${o.ogImage ? `<meta property="og:image" content="${esc(o.ogImage)}">` : ''}
-<meta name="twitter:card" content="summary">
-${appIcon.headTags({ site: 'tips' })}
-${release ? release.metaTag() : ''}
-<script src="${ovServe.url('theme-loader.js')}" defer></script>
-<link rel="stylesheet" href="${asset('css/tips.css')}">
-${jsonLd}
-<script src="${ovServe.url('navbar.js')}" defer></script>
-<script src="${ovServe.url('footer.js')}" defer></script>
-<script src="${asset('js/tips.js')}" defer></script>
-<meta name="ov-boost" content="tips@${esc(RELEASE)}">
-<script src="${ovServe.url('boost.js')}" data-main="#main" defer></script>
-</head>
-<body>
-<div id="navbar-mount"></div>
-${frame.noscriptNav({ name: SITE_NAME, home: '/', links: NAV_LINKS })}
+        // shell.page writes the document, the SEO head, the theme-loader, navbar.js/footer.js with the
+        // navbar init, the noscript nav and the SSR footer; the rest of the head is this site's own.
+        return shell.page({
+            name: SITE_NAME, service: 'tips', lang: 'en',
+            title: o.title || `${SITE_NAME} — support the creators you watch`,
+            titleSuffix: o.title ? ` · ${SITE_NAME}` : undefined,
+            siteName: SITE_NAME, description, canonical, robots,
+            type: o.ogType || 'website', image: o.ogImage, jsonLd: o.jsonLd,
+            navbar: nav, footer, home: '/', navLinks: NAV_LINKS,
+            head: [
+                '<meta name="referrer" content="strict-origin-when-cross-origin">',
+                appIcon.headTags({ site: 'tips' }),
+                release ? release.metaTag() : '',
+                `<link rel="stylesheet" href="${asset('css/tips.css')}">`,
+                `<meta name="ov-boost" content="tips@${esc(RELEASE)}">`,
+                `<script src="${ovServe.url('boost.js')}" data-main="#main" defer></script>`,
+                `<script src="${asset('js/tips.js')}" defer></script>`,
+            ].filter(Boolean).join('\n'),
+            body: `<div id="navbar-mount"></div>
 <header class="site-head"><a class="brand" href="/">${SITE_NAME}</a><nav>${NAV_LINKS.map((l) => `<a href="${l.href}"${o.active === l.label.toLowerCase() ? ' aria-current="page"' : ''}>${l.label}</a>`).join('')}</nav>${who}</header>
 <main id="main" class="page">
 ${o.body || ''}
 ${o.canonicalPath === '/' && o.active === 'home' ? frame.shipped({ service: 'tips', title: `Recently shipped on ${SITE_NAME}` }) : ''}
 </main>
-${frame.footer(footer)}
 <script>
 window.__OV_PAGE = ${JSON.stringify({ navbar: nav, footer }).replace(/</g, '\\u003c')};
-document.addEventListener('DOMContentLoaded', function () {
-  try { if (window.OpenVibeNavbar) { OpenVibeNavbar.init(window.__OV_PAGE.navbar); document.documentElement.classList.add('ov-has-navbar'); } } catch (e) { /* the SSR header stays */ }
-  try { if (window.OpenVibeFooter) OpenVibeFooter.init(window.__OV_PAGE.footer); } catch (e) { /* */ }
+window.addEventListener('DOMContentLoaded', function () {
+  if (window.OpenVibeNavbar) document.documentElement.classList.add('ov-has-navbar');
+  try { if (window.OpenVibeFooter) OpenVibeFooter.init(window.__OV_PAGE.footer); } catch (e) { /* the SSR footer stays */ }
 });
-</script>
-</body>
-</html>`;
+</script>`,
+            bodyAttributes: { 'data-page': o.active || 'page' },
+        });
     }
 
     return { page, abs };
