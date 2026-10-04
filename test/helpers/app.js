@@ -7,7 +7,8 @@
  * opts.valkey an openvibe-sdk/valkey handle (default: the containers' Valkey with TIPS_TEST_STORE=pg,
  * else none: everything shared stays in the process);
  * opts.db an existing handle (a second process on the same database); opts.share another instance
- * whose stubs (Network, Billing, Events, Live) this one uses.
+ * whose stubs (Network, Billing, Events, Chat) this one uses; opts.chat starts the Chat stub and the
+ * chat adapter (else the test adapter).
  *
  *   t.call(method, path, { body, user, cap, sub, key })   user: a stub user → Bearer user JWT;
  *                                                          otherwise a service token with `cap`
@@ -20,7 +21,7 @@ const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
 const { signDelivery, signDeliveryHeaders } = require('openvibe-sdk/events');
-const { startNetwork, startBilling, startEvents, startLive } = require('./stubs');
+const { startNetwork, startBilling, startEvents, startChat } = require('./stubs');
 const { testDb, testValkey } = require('./db');
 
 const EVENTS_SECRET = 'e'.repeat(48);
@@ -31,7 +32,7 @@ async function boot(opts = {}) {
     const network = shared ? shared.network : await startNetwork();
     const billing = shared ? shared.billing : await startBilling(network);
     const events = shared ? shared.events : await startEvents();
-    const live = shared ? shared.live : (opts.live ? await startLive(network) : null);
+    const chat = shared ? shared.chat : (opts.chat ? await startChat(network) : null);
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tips-test-'));
     const env = {
         NODE_ENV: 'test',
@@ -48,8 +49,8 @@ async function boot(opts = {}) {
         EVENTS_URL: events.url,
         EVENTS_RELAY_INTERVAL_MS: '50',
         TIPS_JOBS: 'off',
-        TIPS_CHAT_ADAPTER: live ? 'live-chat' : 'test',
-        LIVE_INTERNAL_URL: live ? live.url : 'http://127.0.0.1:9',
+        TIPS_CHAT_ADAPTER: chat ? 'chat' : 'test',
+        TIPS_CHAT_URL: chat ? chat.url : 'http://127.0.0.1:9',
         TIPS_OVERLAY_HEARTBEAT_MS: '60000',
         ...(opts.env || {}),
     };
@@ -149,14 +150,14 @@ async function boot(opts = {}) {
     const outboxRows = async (type) => (await domain.db.many('SELECT envelope FROM tips_event_outbox ORDER BY id')).map((r) => r.envelope).filter((e) => !type || e.event_type === type);
 
     return {
-        app, base, call, deliver, sse, creator, domain, db: domain.db, store, valkey, config, clock, network, billing, events, live, logs, dir, outboxRows,
+        app, base, call, deliver, sse, creator, domain, db: domain.db, store, valkey, config, clock, network, billing, events, chat, logs, dir, outboxRows,
         adapters: app.locals.adapters,
         close: async () => {
             await domain.overlays.close();
             server.closeAllConnections();
             await new Promise((r) => server.close(r));
             await app.locals.outbox.stop();
-            if (!shared) await Promise.all([network.close(), billing.close(), events.close(), live && live.close()]);
+            if (!shared) await Promise.all([network.close(), billing.close(), events.close(), chat && chat.close()]);
             await store.close();
             if (ownValkey) await ownValkey.close();
             fs.rmSync(dir, { recursive: true, force: true });

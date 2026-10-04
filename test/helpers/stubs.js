@@ -2,13 +2,16 @@
 /**
  * Stand-ins for the services Tips talks to, each on a random port.
  *
- *   startNetwork()  JWKS, client-credentials token endpoint (scope → cap), user JWTs (signUser)
+ *   startNetwork()  JWKS, client-credentials token endpoint (scope → cap), user JWTs (signUser), the
+ *                   identity map (newUser(name, liveId) → GET /internal/identity/resolve legacy_ids)
  *   startBilling()  /api/v1/intents, /transfers, /transfers/:id/refund with Billing's rules that
  *                   matter here (idempotency keys, funds, self-dealing, capability + audience checks),
  *                   and the billing.transaction.* envelopes it would publish (billing.events)
  *   startEvents()   POST /api/v1/events recording what Tips' outbox relays
  *   (Billing and Events also answer GET /api/health, which /api/ready probes)
- *   startLive()     POST /internal/tips/deliveries recording chat deliveries (the live-chat adapter)
+ *   startChat()     POST /internal/chat/messages (R1) and /internal/chat/events (R2) recording what the
+ *                   chat adapter sends, with Chat's rules: capability per route, one result per key,
+ *                   409 for a key reused with another body
  */
 const http = require('http');
 const crypto = require('crypto');
@@ -29,6 +32,7 @@ async function startNetwork() {
     const privatePem = privateKey.export({ type: 'pkcs8', format: 'pem' });
     const grants = [];
     const legacy = {};
+    const resolves = [];
     let issuer = 'http://network.test';
     let n = 100;
 
@@ -57,6 +61,16 @@ async function startNetwork() {
             const cap = String(body.scope || '').split(/\s+/).filter(Boolean);
             return send(res, 200, { access_token: signService({ sub: `svc:${body.client_id}`, aud: [body.audience], cap }), token_type: 'Bearer', expires_in: 300 });
         }
+        if (req.url.startsWith('/internal/identity/resolve?') && req.method === 'GET') {
+            const v = serviceAuth.verifyServiceToken(String(req.headers.authorization || '').slice(7), { publicKey: publicPem, issuer, audience: 'openvibe.network' });
+            if (!v.ok) return send(res, 401, { code: v.code });
+            if (!(v.claims.cap || []).includes('identity.subject.resolve')) return send(res, 403, { code: 'capability.denied' });
+            resolves.push(req.url);
+            const subject = new URL(req.url, 'http://x').searchParams.get('subject_id');
+            const liveIds = Object.keys(legacy).filter((id) => legacy[id].subject === subject);
+            if (!liveIds.length) return send(res, 404, { code: 'identity.subject_not_found' });
+            return send(res, 200, { subject: { type: 'user', id: subject }, legacy_ids: liveIds.map((id) => ({ source_system: 'live', source_type: 'user', source_id: id })) });
+        }
         if (req.url === '/internal/identity/resolve-batch' && req.method === 'POST') {
             const v = serviceAuth.verifyServiceToken(String(req.headers.authorization || '').slice(7), { publicKey: publicPem, issuer, audience: 'openvibe.network' });
             if (!v.ok) return send(res, 401, { code: v.code });
@@ -73,7 +87,7 @@ async function startNetwork() {
     });
     const url = await listen(server);
     issuer = url;
-    return { url, publicPem, signService, signUser, newUser, legacy, grants, close: () => new Promise((r) => server.close(r)) };
+    return { url, publicPem, signService, signUser, newUser, legacy, grants, resolves, close: () => new Promise((r) => server.close(r)) };
 }
 
 /** Billing as Tips sees it. */
@@ -194,27 +208,39 @@ async function startEvents() {
     return { url, published, tokens, close: () => new Promise((r) => server.close(r)) };
 }
 
-async function startLive(network) {
-    const deliveries = [];
-    const state = { fail: null };
+/** OpenVibe.Chat's typed ingress as Tips' chat adapter uses it (OpenVibe.Chat docs/chat-ingress.md). */
+async function startChat(network) {
+    const messages = [];   // { key, body } per R1 call Chat applied
+    const events = [];     // { key, body } per R2 call Chat applied
+    const calls = [];      // every authorized POST: { route, key }
+    const state = { fail: null, failEvents: null };
     const seen = new Map();
+    const CAP = { '/internal/chat/messages': 'chat.message.send', '/internal/chat/events': 'chat.event.publish' };
     const server = http.createServer(async (req, res) => {
         const raw = await readBody(req);
-        if (req.url !== '/internal/tips/deliveries' || req.method !== 'POST') return send(res, 404, {});
-        const v = serviceAuth.verifyServiceToken(String(req.headers.authorization || '').slice(7), { publicKey: network.publicPem, issuer: network.url, audience: 'openvibe.live' });
-        if (!v.ok) return send(res, 401, { code: v.code });
-        if (!(v.claims.cap || []).includes('live.tips_delivery.write')) return send(res, 403, { code: 'capability.denied' });
-        if (state.fail) return send(res, state.fail, { code: 'live.refused', detail: 'stub refusal' });
-        const key = req.headers['idempotency-key'];
-        if (seen.has(key)) return send(res, 200, seen.get(key));
-        const job = JSON.parse(raw);
-        deliveries.push({ key, job });
-        const out = { ok: true, ref: { chat_message_id: deliveries.length } };
-        seen.set(key, out);
+        const cap = CAP[req.url];
+        if (!cap || req.method !== 'POST') return send(res, 404, {});
+        const v = serviceAuth.verifyServiceToken(String(req.headers.authorization || '').slice(7), { publicKey: network.publicPem, issuer: network.url, audience: 'openvibe.chat' });
+        if (!v.ok) return send(res, 401, { ok: false, error: v.code });
+        if (!(v.claims.cap || []).includes(cap)) return send(res, 403, { ok: false, error: 'capability.denied' });
+        const body = JSON.parse(raw || '{}');
+        calls.push({ route: req.url, key: body.key });
+        const fail = req.url === '/internal/chat/events' ? state.failEvents || state.fail : state.fail;
+        if (fail) return send(res, fail, { ok: false, error: 'stub refusal' });
+        if (!body.key || !/^[A-Za-z0-9:._-]{1,160}$/.test(body.key)) return send(res, 400, { ok: false, error: 'A valid idempotency key is required' });
+        const id = `${v.claims.sub}|${req.url}|${body.key}`;
+        if (seen.has(id)) {
+            const old = seen.get(id);
+            if (old.raw !== JSON.stringify(body)) return send(res, 409, { ok: false, error: 'Idempotency key reused with a different body' });
+            return send(res, 200, old.out);
+        }
+        let out;
+        if (req.url === '/internal/chat/messages') { messages.push({ key: body.key, body }); out = { ok: true, id: messages.length }; } else { events.push({ key: body.key, body }); out = { ok: true }; }
+        seen.set(id, { raw: JSON.stringify(body), out });
         return send(res, 200, out);
     });
     const url = await listen(server);
-    return { url, deliveries, state, close: () => new Promise((r) => server.close(r)) };
+    return { url, messages, events, calls, state, close: () => new Promise((r) => server.close(r)) };
 }
 
-module.exports = { startNetwork, startBilling, startEvents, startLive };
+module.exports = { startNetwork, startBilling, startEvents, startChat };

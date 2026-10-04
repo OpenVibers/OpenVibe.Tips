@@ -1,16 +1,17 @@
 'use strict';
 // EXTERNAL PowerChat tips announced by Billing (billing.receipt.external): once the PowerChat webhook
 // points at Billing, Live no longer celebrates a tip on a streamer's own PowerChat, so Tips does —
-// the chat line through Live's /internal/tips/deliveries (as Live's webhook wrote it), the overlay
+// the chat line through OpenVibe.Chat's ingress (as Live's webhook wrote it), the overlay
 // alert and the goal — exactly once per provider payment, and never counted as Billing money.
 const assert = require('assert');
 const { ids } = require('openvibe-contracts');
 const { boot, check, done } = require('./helpers/app');
 
 (async () => {
-    const t = await boot({ live: true });
-    const { domain, live } = t;
-    const alex = await t.creator('alex');
+    const t = await boot({ chat: true });
+    const { domain, chat } = t;
+    const linesFor = (id) => chat.messages.filter((m) => m.body.metadata.interaction_id === id);
+    const alex = await t.creator('alex', { liveId: 501 });
     console.log('external receipts');
 
     /** billing.receipt.external as Billing's ops/external.js writes it. */
@@ -30,7 +31,7 @@ const { boot, check, done } = require('./helpers/app');
     const byRef = (ref) => t.db.maybe("SELECT * FROM tip_interactions WHERE provider = 'powerchat' AND provider_ref = $1", [ref]);
 
     let first;
-    await check('an EXTERNAL receipt is recorded, settled and announced in Live chat as Live\'s webhook wrote it', async () => {
+    await check('an EXTERNAL receipt is recorded, settled and announced in the creator\'s chat as Live\'s webhook wrote it', async () => {
         const g = await t.call('POST', '/api/v1/goals', { user: alex, body: { title: 'New camera', target_amount: 5000 } });
         assert.strictEqual(g.status, 201, g.text);
         first = receipt({ provider_event_id: 'ext-1', amount_cents: 1234, value_bits: 1234, donor_name: 'Generous Fan', message: 'love the stream' });
@@ -41,11 +42,10 @@ const { boot, check, done } = require('./helpers/app');
         assert.deepStrictEqual([i.creator_subject, i.kind, i.amount, i.amount_cents, i.supporter_name, i.message], [alex.subject, 'tip', 1234, 1234, 'Generous Fan', 'love the stream']);
         assert.deepStrictEqual([i.funding, i.settlement, i.origin, i.payment_state, i.billing_txn_id], ['external', 'external', 'billing-external', 'settled', null]);
         await domain.effects.drain();
-        const d = live.deliveries.filter((x) => x.job.interaction.id === i.id);
+        const d = linesFor(i.id);
         assert.strictEqual(d.length, 1);
-        assert.deepStrictEqual([d[0].key, d[0].job.effect, d[0].job.test], [`${i.id}:chat_line`, 'chat_line', false]);
-        assert.strictEqual(d[0].job.text, 'Generous Fan tipped 1,234 Vibes: love the stream (PowerChat)');
-        assert.deepStrictEqual(d[0].job.creator, { type: 'user', id: alex.subject, handle: 'alex' });
+        assert.deepStrictEqual([d[0].key, d[0].body.channel_user_id, d[0].body.message_type, d[0].body.metadata.test], [`${i.id}:chat_line`, 501, 'donation', false]);
+        assert.strictEqual(d[0].body.message, 'Generous Fan tipped 1,234 Vibes: love the stream (PowerChat)');
         const effects = await t.db.many('SELECT effect, state FROM interaction_effects WHERE interaction_id = $1 ORDER BY id', [i.id]);
         assert.deepStrictEqual(effects, [{ effect: 'overlay_alert', state: 'delivered' }, { effect: 'chat_line', state: 'delivered' }]);
         const goal = await domain.goals.present(t.db, await domain.goals.get(t.db, g.json.goal.id));
@@ -63,7 +63,7 @@ const { boot, check, done } = require('./helpers/app');
         await domain.effects.drain();
         assert.strictEqual(await t.db.value("SELECT count(*) FROM tip_interactions WHERE provider_ref = 'ext-1'"), 1);
         const one = await byRef('ext-1');
-        assert.strictEqual(live.deliveries.filter((x) => x.job.interaction.id === one.id).length, 1);
+        assert.strictEqual(linesFor(one.id).length, 1);
     });
 
     await check('EXTERNAL money stays out of the Billing total', async () => {
@@ -84,23 +84,22 @@ const { boot, check, done } = require('./helpers/app');
     });
 
     await check('anonymous: no donor name; a creator with no tip page is still announced', async () => {
-        const bob = t.network.newUser('bob');
+        const bob = t.network.newUser('bob', 502);
         await t.deliver(receipt({ provider_event_id: 'ext-anon', donor_name: null, anonymous: true, message: 'hi' }, { streamer: bob.subject }));
         const i = await byRef('ext-anon');
         assert.deepStrictEqual([i.creator_subject, i.supporter_name], [bob.subject, 'Anonymous']);
         await domain.effects.drain();
-        const d = live.deliveries.find((x) => x.job.interaction.id === i.id);
-        assert.strictEqual(d.job.text, 'Anonymous tipped 500 Vibes: hi (PowerChat)');
-        assert.strictEqual(d.job.creator.handle, null);
+        const [d] = linesFor(i.id);
+        assert.deepStrictEqual([d.body.message, d.body.username, d.body.channel_user_id], ['Anonymous tipped 500 Vibes: hi (PowerChat)', 'Anonymous', 502]);
     });
 
-    await check('a test receipt never reaches Live chat or a goal', async () => {
-        const before = live.deliveries.length;
+    await check('a test receipt never reaches Chat or a goal', async () => {
+        const before = chat.calls.length;
         await t.deliver(receipt({ provider_event_id: 'ext-test', test: true }));
         await domain.effects.drain();
         const i = await byRef('ext-test');
         assert.strictEqual(i.test, true);
-        assert.strictEqual(live.deliveries.length, before);
+        assert.strictEqual(chat.calls.length, before);
         assert.strictEqual(t.adapters.test.jobs.filter((j) => j.interaction.id === i.id).length, 1);
         assert.strictEqual(await t.db.value('SELECT count(*) FROM tip_goal_contributions WHERE interaction_id = $1', [i.id]), 0);
     });

@@ -8,9 +8,9 @@ const { boot, check, done } = require('./helpers/app');
 const TYPES = ['tips.interaction.ready', 'tips.interaction.failed', 'tips.interaction.cancelled', 'tips.goal.updated', 'tips.overlay.delivered', 'tips.overlay.failed'];
 
 (async () => {
-    const t = await boot({ live: true });
-    const { domain, billing, live } = t;
-    const alex = await t.creator('alex', { settings: { tts_enabled: true } });
+    const t = await boot({ chat: true });
+    const { domain, billing, chat } = t;
+    const alex = await t.creator('alex', { liveId: 501, settings: { tts_enabled: true } });
     const viewer = t.network.newUser('viewer');
     billing.fund(viewer.subject, 10_000);
 
@@ -26,11 +26,11 @@ const TYPES = ['tips.interaction.ready', 'tips.interaction.failed', 'tips.intera
         await s.waitFor((e) => e.event === 'alert' && e.data.interaction_id === tip.json.interaction.id);
         s.close();
         await domain.effects.drain();
-        // A delivery Live refuses (tips.interaction.failed), an overlay nobody showed (tips.overlay.failed).
-        live.state.fail = 422;
+        // A delivery Chat refuses (tips.interaction.failed), an overlay nobody showed (tips.overlay.failed).
+        chat.state.fail = 400;
         await t.call('POST', '/api/v1/checkout', { user: viewer, body: { creator: 'alex', amount: 5 } });
         await domain.effects.drain();
-        live.state.fail = null;
+        chat.state.fail = null;
         t.clock.offset += 11 * 60 * 1000;
         await domain.overlays.sweepFailed();
         t.clock.offset = 0;

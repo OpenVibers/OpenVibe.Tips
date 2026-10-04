@@ -44,8 +44,9 @@ from *interaction delivered*.
   PowerChat, once Billing receives the PowerChat webhook)
 - **OpenVibe.Events** — Billing's events in (signed webhook + openvibe-sdk inbox), Tips' events out
   (openvibe-sdk transactional outbox)
-- **OpenVibe.Network** — SSO for people, service tokens, JWKS, identity resolve
-- **OpenVibe.Live** — chat delivery through `/internal/tips/deliveries` (deployed in Live since `f11f809`; [docs/live-patch.diff](docs/live-patch.diff) is the original patch) until OpenVibe.Chat exposes paid messages; overlay consumer
+- **OpenVibe.Network** — SSO for people, service tokens, JWKS, identity resolve (a creator's Chat room)
+- **OpenVibe.Chat** — chat delivery through its typed ingress (`/internal/chat/messages`, `/internal/chat/events`)
+- **OpenVibe.Live** — overlay consumer
 - **OpenVibe.Shared** v2.2.0 (app icon, SSR footer, noscript nav, release manifest, legal pages, boost page moves) and
   the Network's `navbar.js`; **openvibe-contracts** v0.79.0 and **openvibe-sdk** v0.25.0 (service tokens,
   the async data layer `openvibe-sdk/db`, the PostgreSQL outbox and inbox — the events outbox is the SDK's
@@ -65,7 +66,8 @@ Called elsewhere, as the service principal `tips`:
 |---|---|---|
 | OpenVibe.Billing | `billing.intent.create`, `billing.transfer.create` | checkout, and a tip from credit |
 | OpenVibe.Events | `events.event.publish`; `events.subscription.manage` once (`npm run subscribe`) | the outbox relay; the `billing.transaction.*` and `billing.receipt.*` subscriptions |
-| OpenVibe.Live | `live.tips_delivery.write` (only with `TIPS_CHAT_ADAPTER=live-chat`) | chat lines and alerts through `/internal/tips/deliveries` |
+| OpenVibe.Chat | `chat.message.send`, `chat.event.publish` (only with `TIPS_CHAT_ADAPTER=chat`) | donation lines and TTS through `/internal/chat/messages`, the alert through `/internal/chat/events` |
+| OpenVibe.Network | `identity.subject.resolve` (only with `TIPS_CHAT_ADAPTER=chat`) | the creator's Live user id (Chat's room) from `/internal/identity/resolve` |
 
 ## Run it
 
@@ -73,7 +75,7 @@ Called elsewhere, as the service principal `tips`:
 fnm exec --using=22.22.1 npm install
 cp .env.example .env            # OV_OAUTH_CLIENT_SECRET, TIPS_FORM_SECRET, TIPS_EVENTS_SECRET, …
 npm run dev                     # http://localhost:4610 (without DATABASE_URL: an embedded PGlite database in data/pglite)
-npm test                        # every test/*.test.js: stub Network/Billing/Events/Live, PGlite, random ports
+npm test                        # every test/*.test.js: stub Network/Billing/Events/Chat, PGlite, random ports
 eval "$(node_modules/openvibe-sdk/scripts/test-services.sh up)"   # PostgreSQL 18 + PgBouncer + Valkey 9 containers
 npm test                        # … now also test/integration.test.js on the containers
 npm run test:pg                 # every test file through PgBouncer and Valkey
@@ -95,7 +97,7 @@ payment_state   pending ──► settled ──► reversed        mirrored fro
 delivery_state  awaiting_payment ──► queued ──► delivered | failed | cancelled
 ```
 
-A delivery failure (Live down, chat refused) is retried with backoff and finally recorded on the
+A delivery failure (Chat down, chat refused) is retried with backoff and finally recorded on the
 effect; it never touches `payment_state`. A reversal after delivery flips `payment_state` and keeps the
 delivery record; a reversal before delivery cancels the queued effects (`tips.interaction.cancelled`).
 
@@ -284,19 +286,29 @@ within `TIPS_OVERLAY_TTL_MS` becomes `failed` (`tips.overlay.failed`). A reconne
 ## Chat delivery
 
 `server/delivery/` — an adapter is `{ name, deliver(job) → { ref } }` (throw to fail; `permanent` stops
-retries). `live-chat` posts to Live's `/internal/tips/deliveries` with Tips' service token (audience
-`openvibe.live`, `live.tips_delivery.write`), `Idempotency-Key = <interaction>:<effect>`; Live does what
-`POST /api/funds/donate` does after the money moved (channel + global broadcast, a `donation` chat
-message, the alert sound), TTS through `synthesizeAndBroadcastTTS`, media requests into its queue at no
-charge. A job carries the interaction's public view and `privacy`: "Anonymous" and no subject for an
-anonymous supporter, `interaction.amount: null` and a line without the amount when it is hidden, no
-private message. (Live's route turns a null amount into a `donation` event of 0 Vibes, which its chat
-renders as "donated 0 Vibes"; it should render an amount-less line when `privacy.hide_amount` is set.)
-The route came from [docs/live-patch.diff](docs/live-patch.diff) and is deployed in Live since
-`f11f809` (its idempotency record is in memory only); nothing calls it yet. `test`
-records jobs in memory (development; simulations always use it). `none` (the production default) creates
-no chat effects, and it is what production runs. When OpenVibe.Chat publishes a paid-message capability, a `chat` adapter replaces
-`live-chat`.
+retries). `chat` (`server/delivery/chat.js`) posts to OpenVibe.Chat's typed ingress at `TIPS_CHAT_URL`
+with Tips' service token (audience `openvibe.chat`; OpenVibe.Chat `docs/chat-ingress.md`):
+
+| Effect | Chat call | Body |
+|---|---|---|
+| `chat_line`, `paid_message` | `POST /internal/chat/messages` (`chat.message.send`) | `channel_user_id`, `username` (the public name), `message` (the line), `message_type: donation`, `source_platform: tips`, `mirror: true` (global chat too), `metadata { kind: donation, source, amount, message, username, interaction_id, paid_message, highlight_seconds, test }` |
+| | then `POST /internal/chat/events` (`chat.event.publish`) | `target { kind: channel, id }`, `frame { type: alert, streamerId, kind: donation }` (the alert sound) |
+| `tts` | `POST /internal/chat/messages` | a `tts` line (`message` = the filtered TTS text) with `tts { voice, identity_key: tips:<interaction>, key: tips-<interaction> }`: Chat saves it and reads it aloud |
+| `media_request` | none | fails at once: the media queue is not Chat's |
+
+Every body's `key` is the effect's delivery id (`<interaction>:<effect>`; the alert `<delivery id>:alert`):
+Chat applies a key once and answers a repeat with the first result, so a retry after a 5xx or a lost answer
+never posts twice. A 4xx (other than 401/408/425/429) fails the effect at once, everything else is retried
+with backoff; a refused alert does not undo the line (`ref.alert: false`). Chat's rooms are Live's ids: the
+adapter reads the creator's Live user id from the Network (`GET /internal/identity/resolve`, kept ten
+minutes); a creator with no Live account fails at once. The body is rebuilt on each attempt from the
+interaction's current public view, so a word-filter change between attempts makes Chat answer 409, which
+fails the effect. A job carries the interaction's public view and `privacy`: "Anonymous" and no subject
+for an anonymous supporter, `amount: null` and a line without the amount when it is hidden, no private
+message. `test` records jobs in memory (development; simulations always use it). `none` (the production
+default) creates no chat effects, and it is what production runs. To enable delivery: grant the `tips`
+principal the three capabilities above, then set `TIPS_CHAT_ADAPTER=chat` (and `TIPS_CHAT_URL` when Chat
+is not on `127.0.0.1:4400`).
 
 ## Pages (server-rendered, useful without JavaScript)
 
@@ -317,7 +329,7 @@ references to Billing transaction ids, never a balance. People sign in with Netw
 client-credentials tokens for audience `openvibe.tips`, one capability per route. Overlays use revocable
 scoped tokens, hashed at rest, never creator cookies. Billing's events arrive signed
 (`TIPS_EVENTS_SECRET`) through an inbox that dedupes them; `/internal/` and `/metrics` are never public.
-Tips calls only its configured Network, Billing, Events and Live hosts. Secrets (`OV_OAUTH_CLIENT_SECRET`,
+Tips calls only its configured Network, Billing, Events and Chat hosts. Secrets (`OV_OAUTH_CLIENT_SECRET`,
 `TIPS_FORM_SECRET`, `TIPS_EVENTS_SECRET`) live in `/etc/openvibe/tips.env` (0600).
 
 [docs/threat-review.md](docs/threat-review.md) is the written threat review: overlays (tokenised URLs),
@@ -361,10 +373,10 @@ With `VALKEY_URL` every process counts one caller together (`test/integration.te
 |---|---|
 | a duplicate provider webhook yields one Billing transaction and one logical interaction | `test/settlement.test.js` (same event redelivered, same transaction under a new event id, foreign donation delivered three times) |
 | overlay replay never charges again | `test/overlays.test.js` (three `Last-Event-ID` replays: transfers, contributions, goal total, payable, events unchanged) |
-| the creator can use openvibe.tips with Live offline | pages, API, overlays and settlement need no Live call (`test/pages.test.js`, `test/overlays.test.js` run with no Live); only the `live-chat` adapter talks to Live and its failure never touches payment (`test/delivery.test.js`) — **not yet demonstrated on the real host** |
+| the creator can use openvibe.tips with Live offline | pages, API, overlays and settlement need no Live call (`test/pages.test.js`, `test/overlays.test.js` run with no Live); chat delivery goes to OpenVibe.Chat and its failure never touches payment (`test/delivery.test.js`) — **not yet demonstrated on the real host** |
 | creator totals reconcile exactly to Billing | `test/api.test.js` (totals = the stub Billing payable) |
 | simulation never counted; token revocation immediate; goals from settled only; reversal keeps the delivery record | `test/overlays.test.js`, `test/api.test.js`, `test/settlement.test.js` |
-| an EXTERNAL PowerChat tip Billing announced is celebrated once: Live chat line, overlay, goal; never Billing money | `test/external.test.js` (redelivery and republish, same key as `POST /interactions/external`, Tips goal ids, anonymous, test receipts, malformed payloads) |
+| an EXTERNAL PowerChat tip Billing announced is celebrated once: chat line, overlay, goal; never Billing money | `test/external.test.js` (redelivery and republish, same key as `POST /interactions/external`, Tips goal ids, anonymous, test receipts, malformed payloads) |
 | paid messages are filtered before they are shown or read; the creator and their moderators hide and show them without touching the money | `test/moderation.test.js` (mask, hold and release, invisible/full-width evasion, TTS text, invitation links, hide cancels queued chat/TTS and retracts the overlay live/replay/state, restore, pending payments, who may moderate, event payloads) |
 | the suite passes on PostgreSQL behind PgBouncer in transaction mode; one settlement or reversal raced across two processes counts once; the unpaid-checkout limit holds under concurrency; leased work runs once; flushing Valkey changes no money answer (ADR-007 2026-09-24, ADR-035) | `npm run test:pg`; `test/integration.test.js` (two app instances on one database and one Valkey) |
 | a supporter's privacy holds everywhere; the creator chooses what public pages show; export and erasure keep the books reconciled | `test/privacy.test.js` (anonymous / hidden amount / private message across API, overlays, chat jobs, pages and events; goal and supporters page settings; export; erasure scrubs rows, overlay payloads, stored answers and unsent events, emits `tips.interaction.erased`, totals still equal Billing) |
@@ -376,13 +388,13 @@ With `VALKEY_URL` every process counts one caller together (`test/integration.te
   Billing transfers. For PowerChat checkout, Billing answers with a `checkout_ref` and no URL — Tips needs
   `TIPS_POWERCHAT_LINK_TEMPLATE` or Billing returning the link.
 - **EXTERNAL PowerChat tips** arrive as `billing.receipt.external` once Billing is the authority. They need
-  the `billing.receipt.*` subscription (`npm run subscribe`) and `TIPS_CHAT_ADAPTER=live-chat`; Live's
-  `/internal/tips/deliveries` posts the chat line and plays the alert but does not advance **Live's own**
+  the `billing.receipt.*` subscription (`npm run subscribe`) and `TIPS_CHAT_ADAPTER=chat`; the chat
+  adapter posts the chat line and plays the alert but does not advance **Live's own**
   `donation_goals` or send its `goal-update`/`goal-reached` frames (Tips' goals and overlay do advance).
   PowerChat follow/host/channel-points/subscription notices are not forwarded by anyone.
-- **Chat**: `live-chat` needs `TIPS_CHAT_ADAPTER=live-chat` after the cutover (Live's route is deployed); OpenVibe.Chat has no public
-  paid-message/TTS capability yet. The Live patch's media-request path (yt-dlp/oEmbed) is not covered by
-  its test.
+- **Chat**: `TIPS_CHAT_ADAPTER=chat` needs the Network to grant `tips` `chat.message.send` and
+  `chat.event.publish` (audience `openvibe.chat`) and `identity.subject.resolve`. Paid media requests have
+  no delivery route (Chat does not own the media queue): with `chat` they are recorded failed.
 - **Refunds of paid media requests** that never played (Billing's `POST /transfers/:id/refund`) are not
   offered in Tips yet; a refund made elsewhere arrives as `billing.transaction.reversed` and is applied.
 - Legal pages use the shared `ugc` profile, which does not describe payments.
