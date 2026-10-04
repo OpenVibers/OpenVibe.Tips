@@ -36,8 +36,8 @@ const { createModeration } = require('./moderation');
 
 const MONEY = { isolation: 'serializable' };
 
-function createDomain({ db, config, outbox, billing, adapters, valkey = null, now = () => Date.now(), log = console }) {
-    const ctx = { db, config, now, log, outbox, billing, adapters, valkey, MONEY };
+function createDomain({ db, config, outbox, billing, adapters, valkey = null, now = () => Date.now(), log = console, indexnow = null }) {
+    const ctx = { db, config, now, log, outbox, billing, adapters, valkey, indexnow, MONEY };
 
     const runHook = (h) => { Promise.resolve().then(h).catch((e) => log.warn('[Tips] after-commit:', e.message)); };
     ctx.tx = async (fn, opts = {}) => {

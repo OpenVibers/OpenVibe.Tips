@@ -110,6 +110,11 @@ function loadConfig(env = process.env) {
             maxStreamsPerToken: int(env.TIPS_OVERLAY_MAX_STREAMS, 10),
         },
 
+        // IndexNow (openvibe-shared/indexnow): when INDEXNOW_KEY is set the key file is served at
+        // /<key>.txt and a creator's public page appearing, changing or going away pings the engines.
+        // Unset: off — nothing is mounted and nothing is sent.
+        indexnow: { key: env.INDEXNOW_KEY || '' },
+
         limits: {
             maxBits: int(env.TIPS_MAX_BITS, 10_000_000),         // Billing's maximum
             messageChars: int(env.TIPS_MESSAGE_CHARS, 300),        // Live's donation message limit

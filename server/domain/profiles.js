@@ -97,8 +97,10 @@ function createProfiles(ctx) {
         }
         const handle = normalizeHandle(username) && normalizeHandle(username) !== existing.handle ? await freeHandle(db, subject, username) : existing.handle;
         if (handle !== existing.handle || name !== existing.display_name || (safeUrl(avatarUrl) || null) !== (existing.avatar_url || null)) {
-            return parse(await db.one(sql`UPDATE creator_tip_profiles SET handle = ${handle}, display_name = ${name}, avatar_url = ${safeUrl(avatarUrl)}, updated_at = ${at}
+            const next = parse(await db.one(sql`UPDATE creator_tip_profiles SET handle = ${handle}, display_name = ${name}, avatar_url = ${safeUrl(avatarUrl)}, updated_at = ${at}
                 WHERE creator_subject = ${subject} RETURNING *`));
+            pingPublic(existing, next);
+            return next;
         }
         return existing;
     }
@@ -169,8 +171,24 @@ function createProfiles(ctx) {
             set.display_name = n.replace(/[<>]/g, '');
         }
         if (!Object.keys(set).length) return p;
-        return parse(await t.one(sql`UPDATE creator_tip_profiles SET ${sql.set({ ...set, updated_at: iso(ctx.now()) })}, revision = revision + 1
+        const next = parse(await t.one(sql`UPDATE creator_tip_profiles SET ${sql.set({ ...set, updated_at: iso(ctx.now()) })}, revision = revision + 1
             WHERE creator_subject = ${subject} RETURNING *`));
+        pingPublic(p, next);
+        return next;
+    }
+
+    /**
+     * IndexNow: a creator's public page appeared, changed or went away — ping its URL and the sitemap
+     * that lists it. Queued here (the shared module batches and debounces) and only when a public page
+     * was on one side of the change; pingSoon never throws and is a no-op without a key.
+     */
+    function pingPublic(before, after) {
+        const inx = ctx.indexnow;
+        if (!inx || !inx.enabled) return;
+        const visible = (before && before.page_enabled) || (after && after.page_enabled);
+        const handle = (after && after.handle) || (before && before.handle);
+        if (!visible || !handle) return;
+        inx.pingSoon([`${ctx.config.baseUrl}/${handle}`, `${ctx.config.baseUrl}/sitemap.xml`]);
     }
 
     /** Public shape; `owner` adds the settings only the creator sees. */
