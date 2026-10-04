@@ -19,12 +19,13 @@
  *   GET  /overlay/:token            the overlay page for OBS (token = scoped, revocable, never a cookie)
  *   GET  /overlay/:token/events     SSE: alerts and goal updates (Last-Event-ID resumes/replays)
  *   GET  /overlay/:token/state      JSON: active goals and recent alerts (read-only, for other overlay clients)
- *   GET  /robots.txt, /sitemap.xml, /llms.txt
+ *   GET  /robots.txt, /sitemap.xml, /llms.txt, /llms-full.txt
  */
 const crypto = require('crypto');
 const ovServe = require('openvibe-shared/serve');
 const cache = require('openvibe-shared/cache-policy');
 const frame = require('openvibe-shared/frame');
+const legal = require('openvibe-shared/legal');
 const seo = require('openvibe-shared/seo');
 const express = require('express');
 const { sql } = require('openvibe-sdk/db');
@@ -37,6 +38,10 @@ const { PAGE_DEFAULTS } = require('../domain/profiles');
 
 // The sitemap's lastmod: when this server booted — a real date, computed once, never per request.
 const BOOT_AT = new Date().toISOString();
+
+// /llms.txt and /llms-full.txt share one name and summary: the same site, one map.
+const SITE_NAME = 'OpenVibe.Tips';
+const SITE_SUMMARY = 'OpenVibe.Tips: creator support — tips, goals, paid messages, TTS and media requests, and overlays.';
 
 const FLASH = new Set(['Saved', 'Page settings saved', 'Goal added', 'Goal updated', 'Goal closed', 'Overlay link revoked', 'Alert settings saved', 'Test sent — check your overlay',
     'Filter saved', 'Moderator removed', 'Invitation revoked']);
@@ -92,8 +97,8 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
     });
     // /llms.txt (llmstxt.org): a plain-markdown map of the site for language-model crawlers.
     r.get('/llms.txt', (req, res) => res.type('text/plain').set('Cache-Control', cache.htmlHeaders({ maxAge: 3600 })).send(seo.llmsTxt({
-        name: 'OpenVibe.Tips',
-        summary: 'OpenVibe.Tips: creator support — tips, goals, paid messages, TTS and media requests, and overlays.',
+        name: SITE_NAME,
+        summary: SITE_SUMMARY,
         details: 'A creator page lists the goals and a tip form that works without JavaScript; tips settle through Billing, and Tips owns the interaction, the goals and the overlay alerts. The home page lists creators whose pages are switched on. Reading any public page needs no account; tipping needs a signed-in supporter, and the dashboard, receipts, moderation, overlays, sign-in and the API are per-person and never listed here.',
         sections: [
             { title: 'Start here', links: [
@@ -103,9 +108,40 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
             { title: 'Machine-readable', links: [
                 { title: 'Sitemap', url: `${config.baseUrl}/sitemap.xml`, note: 'the public pages, with lastmod' },
                 { title: 'robots.txt', url: `${config.baseUrl}/robots.txt` },
+                { title: 'llms-full.txt', url: `${config.baseUrl}/llms-full.txt`, note: 'this same map with the full text of each public page' },
             ] },
         ],
     })));
+    // /llms-full.txt: the /llms.txt header plus the full plain text of every public page. The creator
+    // pages are the same rows the sitemap lists, and the legal documents are the shared ones; nothing
+    // here is per-person — signed-in, private and overlay pages are never included. maxBytes caps the
+    // response (512 KiB) and the shared kit ends it with a pointer back to /llms.txt when it truncates.
+    r.get('/llms-full.txt', async (req, res) => {
+        const rows = await db.many(sql`SELECT handle, display_name FROM creator_tip_profiles WHERE page_enabled ORDER BY handle`);
+        const legalSite = { id: 'tips', service: 'tips', host: 'openvibe.tips', name: SITE_NAME, profile: 'ugc' };
+        res.type('text/plain').set('Cache-Control', cache.htmlHeaders({ maxAge: 3600 })).send(seo.llmsFull({
+            site: { name: SITE_NAME, url: config.baseUrl },
+            summary: SITE_SUMMARY,
+            base: config.baseUrl,
+            maxBytes: 512 * 1024,
+            sections: [
+                { title: 'Public pages', pages: [
+                    { title: 'Creators on OpenVibe.Tips', url: '/', text: 'The OpenVibe.Tips home page, and the site\'s browse page: it lists every creator whose page is switched on, with their handle, display name and avatar. Opening a creator page, reading their goals and tipping all work without an account; only tipping needs a signed-in supporter. The dashboard, receipts, moderation, overlays and the API are per-person and are never listed here.' },
+                    { title: 'What shipped on OpenVibe.Tips', url: '/updates', text: 'The public update log for OpenVibe.Tips: what shipped, newest first.' },
+                ] },
+                { title: 'Creator pages', pages: rows.map((c) => ({
+                    title: `${c.display_name} on OpenVibe.Tips`,
+                    url: `/${c.handle}`,
+                    text: `The public support page of ${c.display_name} (@${c.handle}): their goals and a tip form that works without JavaScript. Tips settle through OpenVibe Billing and the overlay alerts belong to the creator. The goals page and, only when the creator switches it on, the supporters page are public too.`,
+                })) },
+                { title: 'Legal', pages: legal.PATHS.map((p) => ({
+                    title: legal.TITLES[p.slice(1)],
+                    url: p,
+                    html: legal.article(p.slice(1), legalSite),
+                })) },
+            ],
+        }));
+    });
 
     // ── Receipts ─────────────────────────────────────────────
     /** The supporter's view of each receipt, with its creator's handle and name (one query for all creators). */

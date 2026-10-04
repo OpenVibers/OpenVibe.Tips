@@ -117,6 +117,16 @@ const { boot, check, done } = require('./helpers/app');
         assert.match(llms.headers.get('content-type'), /^text\/plain/);
         assert.match(llms.text, /^# /, 'llms.txt starts with a markdown heading');
         assert.match(llms.text, /\[Creators on OpenVibe\.Tips\]\(http:\/\/tips\.test\/\)/, 'llms.txt lists the main public pages');
+        assert.match(llms.text, /\[llms-full\.txt\]\(http:\/\/tips\.test\/llms-full\.txt\)/, 'llms.txt points at llms-full.txt');
+        const full = await get('/llms-full.txt');
+        assert.strictEqual(full.status, 200);
+        assert.match(full.headers.get('content-type'), /^text\/plain/);
+        assert.match(full.text, /^# /, 'llms-full.txt starts with the same markdown heading');
+        assert.match(full.text, /URL: http:\/\/tips\.test\/\n/, 'llms-full.txt contains the home URL');
+        assert.match(full.text, /URL: http:\/\/tips\.test\/alex\n/, 'llms-full.txt contains the switched-on creator page');
+        assert.ok(!full.text.includes('/bob'), 'llms-full.txt never lists a switched-off page');
+        assert.ok(!/(?:URL: http:\/\/tips\.test\/)(?:dashboard|receipts|overlay|moderate|auth|api)/.test(full.text), 'llms-full.txt lists no signed-in page');
+        assert.ok(Buffer.byteLength(full.text) < 512 * 1024, 'llms-full.txt stays under 512 KiB');
     });
 
     await check('tipping without JavaScript: sign-in first, then a form post settles and lands on the receipt', async () => {
