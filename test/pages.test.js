@@ -56,6 +56,33 @@ const { boot, check, done } = require('./helpers/app');
         assert.match((await get('/@alex')).headers.get('location') || '', /\/alex$/);
     });
 
+    await check('the head comes from openvibe-shared/shell and keeps every tag and script of the site', async () => {
+        const home = await get('/');
+        const head = home.text.slice(0, home.text.indexOf('</head>'));
+        assert.strictEqual(head.match(/<title>/g).length, 1, 'exactly one <title>');
+        assert.match(head, /<title>OpenVibe\.Tips — support the creators you watch<\/title>/);
+        assert.match(head, /<link rel="canonical" href="http:\/\/tips\.test\/">/);
+        assert.match(head, /<meta name="robots" content="index,follow">/);
+        assert.match(head, /<meta property="og:title" content="OpenVibe\.Tips — support the creators you watch">/);
+        assert.match(head, /<meta name="referrer" content="strict-origin-when-cross-origin">/);
+        assert.match(head, /<link rel="stylesheet" href="\/css\/tips\.css\?v=[^"]+">/);
+        assert.match(head, /<link rel="icon"[^>]*data-ov-icon="tips"/, 'the app-icon tags');
+        assert.match(head, /<meta name="ov-release"/);
+        assert.match(head, /<meta name="ov-boost" content="tips@[^"]+">/);
+        assert.match(head, /<script src="\/shared\/boost\.js\?v=[0-9a-f]{12}" data-main="#main" defer><\/script>/);
+        assert.match(head, /<script src="\/js\/tips\.js\?v=[^"]+" defer><\/script>/);
+        for (const s of ['theme-loader', 'navbar', 'footer']) assert.match(head, new RegExp(`/shared/${s}\\.js\\?v=[0-9a-f]{12}`), s);
+        assert.match(home.text, /<body data-page="home">/);
+        assert.match(home.text, /<header class="site-head">/);
+        assert.match(home.text, /<main id="main" class="page">/);
+        assert.match(home.text, /OpenVibeFooter\.init\(window\.__OV_PAGE\.footer\)/);
+
+        const creator = await get('/alex');
+        const creatorHead = creator.text.slice(0, creator.text.indexOf('</head>'));
+        assert.match(creatorHead, /<link rel="canonical" href="http:\/\/tips\.test\/alex">/);
+        assert.match(creatorHead, /<script type="application\/ld\+json">\{[^<]*"@type":"ProfilePage"/);
+    });
+
     await check('a switched-off page: 404 + noindex for everyone else; a noindex preview for its creator', async () => {
         const anon = await get('/bob');
         assert.strictEqual(anon.status, 404);
