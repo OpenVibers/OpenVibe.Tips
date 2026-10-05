@@ -79,7 +79,7 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
     // ── Home, robots, sitemap ────────────────────────────────
     r.get('/', withViewer, async (req, res) => {
         const creators = await db.many(sql`SELECT handle, display_name, avatar_url FROM creator_tip_profiles WHERE page_enabled ORDER BY updated_at DESC LIMIT 24`);
-        html(res, pageFor(req, { active: 'home', canonicalPath: '/', body: pages.home({ creators }) }));
+        html(res, pageFor(req, { active: 'home', canonicalPath: '/', styles: [require('openvibe-shared/showcase').STYLESHEET], body: pages.home({ creators }) }));
     });
     // What shipped on OpenVibe.Tips: the shared update log every OpenVibe site has.
     r.get('/updates', withViewer, (req, res) => html(res, pageFor(req, { canonicalPath: '/updates', title: 'What shipped on OpenVibe.Tips', body: frame.updatesBody({ service: 'tips', siteName: 'OpenVibe.Tips' }) + `<script src="${ovServe.url('shipped.js')}" defer></script>` })));

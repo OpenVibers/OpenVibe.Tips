@@ -77,3 +77,12 @@ ul.mod-list, ul.plain { list-style: none; padding: 0; }
 .mod-item.hidden .msg, .mod-item.test { color: var(--tips-muted); }
 .mod-item.held { border-left: 3px solid var(--tips-bad); padding-left: 10px; }
 .mod-item .msg { margin: 6px 0; overflow-wrap: anywhere; }
+
+/* The home's kit sections (openvibe-shared/showcase) sit in this page's 880 px column, which already has its gutter. */
+.page .sc-hero, .page .sc-sec { padding-left: 0; padding-right: 0; }
+.page .sc-hero { padding-top: 8px; }
+.page .sc-sec { margin-top: 44px; }
+.page #creators .creators { margin-top: 12px; }
+.page .sc-tiers { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+@media (min-width: 640px) { .page .sc-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.page .sc-price { font-size: 24px; }

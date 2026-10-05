@@ -5,6 +5,7 @@
  * run the dashboard, with JavaScript switched off. Copy rules: no pricing claims, no pleading copy —
  * the creator's own headline is the only pitch on their page.
  */
+const showcase = require('openvibe-shared/showcase');
 const { esc } = require('./layout');
 const { VOICES } = require('../domain/profiles');
 
@@ -35,21 +36,52 @@ function goalCard(g) {
 
 function errorBox(msg) { return msg ? `<p class="notice error" role="alert">${esc(msg)}</p>` : ''; }
 
+/**
+ * What a new tip page asks for until its creator changes it: migrations/0001_initial.sql's column defaults
+ * (creator_tip_profiles.min_amount, paid_message_min, tts_min_amount, media_request_min). test/pages.test.js reads
+ * the migration and fails if these drift, so the home page never quotes a number the service does not use.
+ */
+const NEW_PAGE_MINIMUMS = Object.freeze({ tip: 1, paid_message: 100, tts: 100, media_request: 25 });
+const vibes = (n) => `${n} ${n === 1 ? 'Vibe' : 'Vibes'}`;
+
+/** The home: the product's own words (openvibe-shared/showcase), then the creators who switched their page on. */
 function home({ creators }) {
-    return `<section class="hero">
-  <h1>Support the creators you watch</h1>
-  <p>Tip a creator with Vibes, send a highlighted paid message, have your message read out, or request a video for their stream. Creators set goals and show every tip on stream with an overlay.</p>
-  <p class="actions"><a class="btn" href="/dashboard">Open your creator dashboard</a> <a class="btn ghost" href="/receipts">Your receipts</a></p>
-</section>
-<section>
-  <h2>How it works</h2>
-  <ol class="steps">
-    <li><b>Pick a creator.</b> Every creator who switched their page on has one at openvibe.tips/<i>name</i>.</li>
-    <li><b>Choose what to send.</b> A tip, a paid message, text-to-speech or a media request, within the creator's own limits.</li>
-    <li><b>Pay with Vibes.</b> From your Vibes balance, or through checkout. Payments are handled by OpenVibe.Billing; your receipt shows when the payment settled and when your message was delivered.</li>
-  </ol>
-</section>
-${creators.length ? `<section><h2>Creators on OpenVibe.Tips</h2><ul class="creators">${creators.map((c) => `<li><a href="/${esc(c.handle)}">${c.avatar_url ? `<img src="${esc(c.avatar_url)}" alt="" width="40" height="40" loading="lazy">` : ''}<span>${esc(c.display_name)}</span></a></li>`).join('')}</ul></section>` : ''}`;
+    const m = NEW_PAGE_MINIMUMS;
+    return showcase.hero({
+        eyebrow: 'OpenVibe.Tips',
+        title: 'Support the creators', accent: 'you watch',
+        lede: 'Tip a creator with Vibes, send a highlighted paid message, have your message read out, or request a video for their stream. Creators set goals and show every tip on stream with an overlay.',
+        actions: creators.length
+            ? [{ label: 'Find a creator', href: '#creators', primary: true }, { label: 'Start your tip page', href: '/dashboard' }]
+            : [{ label: 'Start your tip page', href: '/dashboard', primary: true }],
+        note: 'Already sent something? Your receipts are at openvibe.tips/receipts.',
+    }) + showcase.features({
+        title: 'What you can send',
+        items: [
+            { icon: 'ov:tips', title: 'A tip', text: 'Vibes straight to the creator, with an optional message.' },
+            { icon: 'ov:chat', title: 'A paid message', text: 'Your message, highlighted in their chat.' },
+            { icon: 'ov:audio', title: 'Text-to-speech', text: 'Your message read out on stream, where the creator turned it on.' },
+            { icon: 'ov:video', title: 'A media request', text: 'A video for their stream, up to the length they allow, where they turned it on.' },
+        ],
+    }) + showcase.steps({
+        title: 'How it works',
+        items: [
+            { title: 'Pick a creator', text: 'Every creator who switched their page on has one at openvibe.tips/name.' },
+            { title: 'Choose what to send', text: "A tip, a paid message, text-to-speech or a media request, within the creator's own limits." },
+            { title: 'Pay with Vibes', text: 'From your Vibes balance, or through checkout. Payments are handled by OpenVibe.Billing; your receipt shows when the payment settled and when your message was delivered.' },
+        ],
+    }) + showcase.pricing({
+        title: 'What it costs to send',
+        lede: 'The least you can send of each. Every creator sets their own minimums; these are what a new page starts with.',
+        tiers: [
+            { name: 'Tip', price: vibes(m.tip), items: ['Any amount above the minimum', 'Counts toward their goals'] },
+            { name: 'Paid message', price: vibes(m.paid_message), items: ['Highlighted in chat', 'Shown by their stream overlay'] },
+            { name: 'Text-to-speech', price: vibes(m.tts), items: ['Read out on stream', 'Only where the creator turned it on'] },
+            { name: 'Media request', price: vibes(m.media_request), items: ['A video for their stream', 'Only where the creator turned it on'] },
+        ],
+        note: "The creator's page shows their own minimums before you pay.",
+    }) + `
+${creators.length ? `<section class="sc-sec" id="creators" aria-labelledby="creators-h"><h2 id="creators-h">Creators on OpenVibe.Tips</h2><ul class="creators">${creators.map((c) => `<li><a href="/${esc(c.handle)}">${c.avatar_url ? `<img src="${esc(c.avatar_url)}" alt="" width="40" height="40" loading="lazy">` : ''}<span>${esc(c.display_name)}</span></a></li>`).join('')}</ul></section>` : ''}`;
 }
 
 /** The tip form: every field works as a plain POST. */
@@ -351,4 +383,4 @@ function errorPage({ status, title, message }) {
     return `<section class="card"><h1>${esc(title)}</h1><p>${esc(message)}</p><p><a href="/">OpenVibe.Tips home</a></p></section><!-- ${status} -->`;
 }
 
-module.exports = { home, creatorPage, goalsPage, supportersPage, receiptsPage, erasePage, receiptPage, dashboard, moderatePage, invitePage, inviteCreated, tokenCreated, errorPage, tipForm };
+module.exports = { NEW_PAGE_MINIMUMS, home, creatorPage, goalsPage, supportersPage, receiptsPage, erasePage, receiptPage, dashboard, moderatePage, invitePage, inviteCreated, tokenCreated, errorPage, tipForm };
