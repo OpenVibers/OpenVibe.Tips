@@ -31,6 +31,20 @@ const { boot, check, done } = require('./helpers/app');
         assert.match(r.text, /id="ov-footer"|class="ovf/);
         assert.match(r.text, /href="\/alex"/);
         assert.ok(!r.text.includes('href="/bob"'), 'switched-off pages are not listed');
+        // The home opens with the showcase kit (openvibe-shared/showcase): one h1 (the hero), the kit's sheet, the
+        // pricing from the real defaults, and the creators list still below it.
+        assert.ok(r.text.includes('class="sc-hero') && r.text.includes('class="sc-tiers"'), 'hero and pricing');
+        assert.match(r.text, /<link rel="stylesheet" href="\/shared\/showcase\.css\?v=[^"]+">/);
+        assert.strictEqual((r.text.match(/<h1[\s>]/g) || []).length, 1, 'one h1');
+        assert.ok(r.text.indexOf('class="sc-hero') < r.text.indexOf('id="creators"'), 'the creators follow the showcase');
+        assert.ok(!(await get('/alex')).text.includes('showcase.css'), 'only the home links the kit');
+    });
+
+    await check('the home quotes the minimums a new page really starts with (the migration defaults)', () => {
+        const sql = require('fs').readFileSync(require('path').join(__dirname, '..', 'migrations', '0001_initial.sql'), 'utf8');
+        const def = (col) => Number((sql.match(new RegExp(`\\b${col}\\s+bigint NOT NULL DEFAULT (\\d+)`)) || [])[1]);
+        const { NEW_PAGE_MINIMUMS: m } = require('../server/web/pages');
+        assert.deepStrictEqual(m, { tip: def('min_amount'), paid_message: def('paid_message_min'), tts: def('tts_min_amount'), media_request: def('media_request_min') });
     });
 
     await check('every page carries the boost marker and script, and the navbar signs in back to the current page', async () => {
