@@ -48,7 +48,7 @@ from *interaction delivered*.
 - **OpenVibe.Chat** — chat delivery through its typed ingress (`/internal/chat/messages`, `/internal/chat/events`)
 - **OpenVibe.Live** — overlay consumer
 - **OpenVibe.Shared** v2.2.0 (app icon, SSR footer, noscript nav, release manifest, legal pages, boost page moves) and
-  the Network's `navbar.js`; **openvibe-contracts** v0.79.0 and **openvibe-sdk** v0.35.0 (service tokens,
+  the Network's `navbar.js`; **openvibe-contracts** v0.79.0 and **openvibe-sdk** v0.28.0 (service tokens,
   the async data layer `openvibe-sdk/db`, the PostgreSQL outbox and inbox — the events outbox is the SDK's
   `createServiceOutbox`, plan T1 — Valkey, pub/sub and the shared limit store), pinned by release tarball;
   `pg` and `iovalkey` (drivers), PGlite for tests
