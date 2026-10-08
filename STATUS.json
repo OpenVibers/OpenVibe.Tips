@@ -11,7 +11,7 @@
   "database": "PostgreSQL 18 through PgBouncer (transaction mode) as the system of record, Valkey 9 for shared state (per-actor limits, overlay fan-out, overlay stream slots), ADR-035: database ov_tips from OpenVibe.Host's data role, schema in migrations/ (0001_initial expand, 0002_drop_legacy_import contract), async on openvibe-sdk/db v0.28.0, money paths serializable with row locks, PostgreSQL outbox and inbox.",
   "contracts": "openvibe-contracts v0.112.0",
   "sdk": "openvibe-sdk v0.35.0",
-  "shared": "openvibe-shared v2.13.2",
+  "shared": "openvibe-shared v2.15.0",
   "notes": "Runtime, API, SSR pages, overlays, the Billing settlement consumer and the events outbox are built, tested and deployed, together with /metrics (loopback only), truthful /api/ready (Billing and Events checks), supporter privacy (anonymous, hidden amount, private message), goal and supporter-page settings, export and erasure (tips.interaction.erased), moderation (word filter, hide/show, invited moderators, tips.interaction.moderated) and per-actor limits. Capabilities (18 tips.*) and payload schemas are in openvibe-contracts. No billing.* event had arrived: Billing runs in shadow. A written internal threat review (docs/threat-review.md) with its fixes and test/security.test.js. Not done: an independent security review; the openvibe.tips launch. Live stays the place tips happen until the Billing cutover (blocked on the owner re-pointing the PowerChat webhook) and the launch rule in README.md holds.",
   "features": [
     "tips, paid messages, TTS and media requests settled by OpenVibe.Billing (never Tips' own money)",
