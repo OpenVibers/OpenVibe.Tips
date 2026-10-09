@@ -22,6 +22,7 @@ const { createApp } = require('./app');
 const { createValkey } = require('openvibe-sdk/valkey');
 const { createRegistry } = require('openvibe-shared/metrics');
 const { gracefulStop } = require('openvibe-sdk/service');
+const { startSubscriptions } = require('openvibe-sdk/account-data');
 
 /**
  * The process stop (openvibe-sdk/service, plan T1): the job timers and the relays stop taking new
@@ -29,7 +30,7 @@ const { gracefulStop } = require('openvibe-sdk/service');
  * database and Valkey close; past the deadline the process exits 0, as the hand-rolled 5 s timer did.
  * Exported so a test can inject `exit` and `signals: false`.
  */
-function createLifecycle({ server, app, timers = [], exit, signals } = {}) {
+function createLifecycle({ server, app, timers = [], exit, signals, extra = [] } = {}) {
     const { db, valkey, domain, keys, outbox } = app.locals;
     return gracefulStop({
         name: 'Tips', server, deadlineExitCode: 0, exit, signals,
@@ -38,6 +39,7 @@ function createLifecycle({ server, app, timers = [], exit, signals } = {}) {
             () => keys.stop(),
             () => domain.overlays.close(),
             () => outbox.stop(),
+            ...extra,
         ],
         close: [() => db.close(), () => { if (valkey) return valkey.close(); }],
     });
@@ -72,7 +74,13 @@ async function start() {
     });
     server.keepAliveTimeout = 65_000;
 
-    createLifecycle({ server, app, timers });
+    // The two account subscriptions at OpenVibe.Events (ADR-033), created when missing; off without EVENTS_URL,
+    // TIPS_EVENTS_SECRET or the client secret. The billing.* ones stay scripts/subscribe.js's.
+    const subscriptions = startSubscriptions({
+        eventsUrl: config.events.url, endpoint: `http://127.0.0.1:${config.port}/internal/events`, secret: config.events.webhookSecrets[0],
+        networkInternalUrl: config.network.internalUrl, clientId: config.oauth.clientId, clientSecret: config.oauth.clientSecret,
+    });
+    createLifecycle({ server, app, timers, extra: [() => { if (subscriptions) subscriptions.stop(); }] });
     return { server, app };
 }
 

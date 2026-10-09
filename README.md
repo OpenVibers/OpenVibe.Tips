@@ -65,7 +65,8 @@ Called elsewhere, as the service principal `tips`:
 | Service | Grant | Why |
 |---|---|---|
 | OpenVibe.Billing | `billing.intent.create`, `billing.transfer.create` | checkout, and a tip from credit |
-| OpenVibe.Events | `events.event.publish`; `events.subscription.manage` once (`npm run subscribe`) | the outbox relay; the `billing.transaction.*` and `billing.receipt.*` subscriptions |
+| OpenVibe.Events | `events.event.publish`; `events.subscription.manage` (`npm run subscribe`, and at boot) | the outbox relay; the `billing.transaction.*` and `billing.receipt.*` subscriptions; the two account subscriptions (created at boot when missing) |
+| OpenVibe.Network | `network.account.export.contribute`, `network.account.deletion.confirm` (granted last, once this release is live) | account export and deletion (ADR-033) |
 | OpenVibe.Chat | `chat.message.send`, `chat.event.publish` (only with `TIPS_CHAT_ADAPTER=chat`) | donation lines and TTS through `/internal/chat/messages`, the alert through `/internal/chat/events` |
 | OpenVibe.Network | `identity.subject.resolve` (only with `TIPS_CHAT_ADAPTER=chat`) | the creator's Live user id (Chat's room) from `/internal/identity/resolve` |
 
@@ -226,6 +227,18 @@ Billing transaction, goal contribution), so Billing's books and the creators' to
 Tips still waiting for their payment are kept until it settles or fails. Each erased interaction emits
 `tips.interaction.erased`, whose `redacts` has OpenVibe.Events tombstone Tips' earlier events about it.
 Stored API answers (Idempotency-Key replays) are pruned after a week.
+
+**Account export and deletion (ADR-033).** `network.account.export_requested` and `network.account.deleted`
+arrive at `POST /internal/events` and are answered by `server/domain/account-data.js` (`openvibe-sdk/account-data`),
+outside the money inbox, with one receipt per export and deletion in `account_data_events`.
+
+- **As a supporter:** the export is `/me/export`'s, and the deletion is the erasure above.
+- **As a creator:** the export adds their settings, overlays (never a token hash), goals, the tips they received
+  (without the supporters) and their moderators. The deletion removes their settings and page, overlays, overlay
+  tokens and alert history, moderator list and invitations, and the stored answers that name them. The tips they
+  received, the paid messages and media requests on them, their goals and their moderation log are kept and counted
+  as retained.
+- **As a moderator:** their moderator rows go; the moderation log keeps naming them.
 
 ## Moderation
 
