@@ -22,21 +22,32 @@
  *
  * The signature (X-OpenVibe-Signature, HMAC-SHA256 of the raw body with TIPS_EVENTS_SECRET) is
  * verified with openvibe-sdk's parseDelivery. Only events whose source is `billing` are applied.
+ *
+ * network.account.export_requested and network.account.deleted (ADR-033, subscribed at boot) go to
+ * domain/account-data.js instead, outside the money inbox: openvibe-sdk/account-data keeps its own receipt
+ * per export and deletion id (account_data_events) and throws when Network should be asked again, so a
+ * failure is answered 500 and Events redelivers.
  */
 const express = require('express');
 const { http } = require('openvibe-contracts');
 const { parseDelivery, createPgInbox } = require('openvibe-sdk/events');
 
+const { TOPICS: ACCOUNT_TOPICS } = require('openvibe-sdk/account-data');
+
 const CONSUMER = 'tips-billing';
 const TABLE = 'tips_event_inbox';   // migrations/0001_initial.sql (inboxSchema)
 
-function consumerRouter({ domain, config, log = console }) {
+function consumerRouter({ domain, config, log = console, accountData = null, accountSend = null }) {
     const router = express.Router();
     // The inbox's transaction is the domain's MONEY one (serializable, with after-commit hooks).
     const inbox = createPgInbox({ tx: (fn) => domain.tx(fn, domain.MONEY), maybe: (...a) => domain.db.maybe(...a) }, { table: TABLE, now: domain.now });
 
     /** Apply one envelope (also used by tests and the replay tool). Returns { duplicate, outcome }. */
     async function apply(event) {
+        if (ACCOUNT_TOPICS.includes(event.event_type)) {
+            if (!accountData || !accountSend) throw new Error('account export and deletion are not configured');
+            return { duplicate: false, outcome: await accountData.apply(event, { send: accountSend }) };
+        }
         const r = await inbox.once(CONSUMER, event.event_id, async (t) => {
             if (event.source !== 'billing') return 'ignored:source';
             const payload = event.payload && typeof event.payload === 'object' ? event.payload : {};

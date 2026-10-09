@@ -30,6 +30,8 @@ const { createBillingClient } = require('./billing-client');
 const { createAdapters } = require('./delivery');
 const { createTipsOutbox } = require('./events/outbox');
 const { consumerRouter } = require('./events/consumer');
+const accountDataLib = require('./domain/account-data');
+const { createNetworkSender } = require('openvibe-sdk/account-data');
 const { createDomain } = require('./domain');
 const { createApiAuth } = require('./api/auth');
 const { v1Router } = require('./api/v1');
@@ -103,7 +105,13 @@ function createApp(opts = {}) {
     // GET /release.json (ADR-016) and POST /release-metrics: open tabs' update reports into /metrics.
     release.mount(app, { registry: metrics.registry });
 
-    const consumer = consumerRouter({ domain, config, log });
+    // Account export and deletion (ADR-033, domain/account-data.js), pushed to Network's internal routes with Tips' own
+    // client-credentials token; a test injects a stand-in through opts.accountSend.
+    const accountData = accountDataLib.create({ domain, log });
+    const accountSend = opts.accountSend || (config.oauth.clientSecret
+        ? createNetworkSender({ networkInternalUrl: config.network.internalUrl, clientId: config.oauth.clientId, clientSecret: config.oauth.clientSecret, fetch: fetchImpl })
+        : null);
+    const consumer = consumerRouter({ domain, config, log, accountData, accountSend });
     // Service-to-service only: OpenVibe.Events calls 127.0.0.1:4610 directly; anything that came
     // through nginx carries X-Forwarded-For and is refused (the signature is checked as well).
     app.use('/internal', (req, res, next) => (req.headers['x-forwarded-for'] || req.headers['x-real-ip'] || req.headers['cf-connecting-ip']
@@ -148,7 +156,7 @@ function createApp(opts = {}) {
         return res.status(500).type('html').send(layout.page({ title: 'Error', robots: 'noindex', body: pages.errorPage({ status: 500, title: 'Something went wrong', message: 'This one is on us. Please try again.' }) }));
     });
 
-    Object.assign(app.locals, { config, db, valkey, domain, keys, outbox, adapters, billing, consumer, metrics, indexnow });
+    Object.assign(app.locals, { config, db, valkey, domain, keys, outbox, adapters, billing, consumer, metrics, indexnow, accountData });
     return app;
 }
 
