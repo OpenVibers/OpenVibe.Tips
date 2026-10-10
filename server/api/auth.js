@@ -18,7 +18,8 @@
  * A request that presents a token is judged on that token alone: a bad one is refused, never
  * downgraded to anonymous.
  */
-const { serviceAuth, capabilities, http, ids } = require('openvibe-contracts');
+const { capabilities, http, ids } = require('openvibe-contracts');
+const { verifyService } = require('../network');
 
 const PRINCIPAL_SUB = /^(svc|app|mod):/;
 const ANON = Object.freeze({ kind: 'anonymous' });
@@ -41,27 +42,28 @@ function userPrincipal(claims) {
 }
 
 function createApiAuth({ config, keys, userAuth }) {
-    function resolve(req) {
+    async function resolve(req) {
         const header = String(req.headers.authorization || '');
         if (!header.startsWith('Bearer ')) return { principal: ANON };
         const token = header.slice(7).trim();
-        const publicKey = keys.get();
-        if (!publicKey) return { error: [503, 'identity.unavailable', 'the Network signing key is not loaded yet'] };
+        if (!keys.ready()) return { error: [503, 'identity.unavailable', 'the Network signing key is not loaded yet'] };
         const payload = decodePayload(token);
         if (payload && typeof payload.sub === 'string' && PRINCIPAL_SUB.test(payload.sub)) {
-            const r = serviceAuth.verifyServiceToken(token, { publicKey, issuer: config.network.issuer, audience: config.audience });
+            let r;
+            try { r = await verifyService(config, keys, token); } catch { return { error: [503, 'identity.unavailable', 'the Network signing keys could not be read'] }; }
             if (!r.ok) return { error: [401, r.code, r.reason] };
             return { principal: { kind: 'service', sub: r.claims.sub, cap: r.claims.cap || [], jti: r.claims.jti } };
         }
-        const claims = userAuth.verify(token);
+        const claims = await userAuth.verify(token);
         if (!claims) return { error: [401, 'token.invalid', 'the user token is invalid or expired'] };
         const p = userPrincipal(claims);
         if (!p) return { error: [403, 'identity.no_subject', 'this account has no canonical subject yet; sign in again'] };
         return { principal: p };
     }
 
-    function middleware(req, res, next) {
-        const r = resolve(req);
+    async function middleware(req, res, next) {
+        let r;
+        try { r = await resolve(req); } catch (err) { return next(err); }
         if (r.error) return http.sendProblem(res, r.error[0], r.error[1], { detail: r.error[2], ctx: req.ov });
         req.principal = r.principal;
         return next();

@@ -2,7 +2,7 @@
   "name": "openvibe-tips",
   "version": "0.1.0",
   "private": true,
-  "description": "OpenVibe.Tips — creator support on the OpenVibe network: tips, goals, paid messages, TTS and media requests, and overlays. Billing moves the money; Tips owns the interaction.",
+  "description": "OpenVibe.Tips \u2014 creator support on the OpenVibe network: tips, goals, paid messages, TTS and media requests, and overlays. Billing moves the money; Tips owns the interaction.",
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
@@ -25,7 +25,6 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "iovalkey": "^0.4.0",
-    "jsonwebtoken": "^9.0.2",
     "openvibe-contracts": "https://codeload.github.com/OpenVibers/OpenVibe.Contracts/tar.gz/refs/tags/v0.129.0",
     "openvibe-sdk": "https://codeload.github.com/OpenVibers/OpenVibe.SDK/tar.gz/refs/tags/v0.38.1",
     "openvibe-shared": "https://codeload.github.com/OpenVibers/OpenVibe.Shared/tar.gz/refs/tags/v3.0.0",
@@ -35,6 +34,7 @@
     "node": ">=22.0.0"
   },
   "devDependencies": {
-    "@electric-sql/pglite": "^0.5.8"
+    "@electric-sql/pglite": "^0.5.8",
+    "jsonwebtoken": "^9.0.2"
   }
 }

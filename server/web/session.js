@@ -63,9 +63,9 @@ function withParam(target, key, value) {
 
 /** Page middleware: req.viewer = the signed-in person (principal shape) or null. Never blocks. */
 function viewerMiddleware(userAuth) {
-    return (req, _res, next) => {
+    return async (req, _res, next) => {
         const token = req.cookies && req.cookies[ACCESS_COOKIE];
-        const claims = token ? userAuth.verify(token) : null;
+        const claims = token ? await userAuth.verify(token) : null;
         req.viewer = claims ? userPrincipal(claims) : null;
         req.viewerClaims = claims ? claimsToUser(claims) : null;
         next();
@@ -116,9 +116,9 @@ function createSessionRoutes(config, userAuth, { fetchImpl = globalThis.fetch } 
         throw lastErr || new Error('Network unreachable');
     }
 
-    router.get('/login', (req, res) => {
+    router.get('/login', async (req, res) => {
         const silent = !!req.query.silent && req.query.silent !== '0';
-        if (silent && userAuth.verify(req.cookies && req.cookies[ACCESS_COOKIE])) { clearFlow(res); return res.redirect(sanitizeNext(req.query.next, config)); }
+        if (silent && await userAuth.verify(req.cookies && req.cookies[ACCESS_COOKIE])) { clearFlow(res); return res.redirect(sanitizeNext(req.query.next, config)); }
         const { url, state } = userAuth.client.getAuthorizationUrl(config.oauth.scope);
         let target = url;
         if (silent) { const u = new URL(url); u.searchParams.set('prompt', 'none'); target = u.toString(); }
@@ -167,7 +167,7 @@ function createSessionRoutes(config, userAuth, { fetchImpl = globalThis.fetch } 
             const data = await tokenGrant({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: token });
             if (!data.access_token) throw Object.assign(new Error('no token'), { status: 401, error: 'invalid_grant' });
             setSession(res, data.access_token, data.refresh_token);
-            return res.json({ ok: true, user: data.user || claimsToUser(userAuth.verify(data.access_token)) });
+            return res.json({ ok: true, user: data.user || claimsToUser(await userAuth.verify(data.access_token)) });
         } catch (err) {
             if (err.status && err.status < 500) return res.status(401).json({ error: err.error || 'invalid_grant' });
             return res.status(502).json({ error: 'server_error', error_description: 'Could not reach OpenVibe.Network' });
@@ -190,9 +190,9 @@ function createSessionRoutes(config, userAuth, { fetchImpl = globalThis.fetch } 
         res.redirect(sanitizeNext(req.query.next, config));
     });
 
-    router.get('/me', (req, res) => {
+    router.get('/me', async (req, res) => {
         const token = (String(req.headers.authorization || '').startsWith('Bearer ') ? req.headers.authorization.slice(7) : null) || (req.cookies && req.cookies[ACCESS_COOKIE]);
-        const claims = userAuth.verify(token);
+        const claims = await userAuth.verify(token);
         if (!claims) return res.status(401).json({ error: 'Not authenticated' });
         res.json({ user: claimsToUser(claims), expires_at: claims.exp ? claims.exp * 1000 : null });
     });
@@ -203,7 +203,7 @@ function createSessionRoutes(config, userAuth, { fetchImpl = globalThis.fetch } 
         try {
             const data = await tokenGrant({ grant_type: 'refresh_token', refresh_token: refresh });
             setSession(res, data.access_token, data.refresh_token);
-            return res.json({ token: data.access_token, user: claimsToUser(userAuth.verify(data.access_token)) });
+            return res.json({ token: data.access_token, user: claimsToUser(await userAuth.verify(data.access_token)) });
         } catch (err) {
             if (err.status && err.status < 500) { clearSession(res); return res.status(401).json({ error: 'Refresh token rejected — please sign in again' }); }
             return res.status(502).json({ error: 'Could not reach OpenVibe.Network' });
