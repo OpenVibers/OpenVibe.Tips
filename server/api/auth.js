@@ -46,7 +46,7 @@ function createApiAuth({ config, keys, userAuth }) {
         const header = String(req.headers.authorization || '');
         if (!header.startsWith('Bearer ')) return { principal: ANON };
         const token = header.slice(7).trim();
-        if (!keys.ready()) return { error: [503, 'identity.unavailable', 'the Network signing key is not loaded yet'] };
+        if (!keys.loaded()) return { error: [503, 'identity.unavailable', 'the Network signing key is not loaded yet'] };
         const payload = decodePayload(token);
         if (payload && typeof payload.sub === 'string' && PRINCIPAL_SUB.test(payload.sub)) {
             let r;
