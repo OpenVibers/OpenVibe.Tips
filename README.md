@@ -452,6 +452,6 @@ Part of the [OpenVibe network](https://openvibe.network). Built in the open by [
 
 <!-- versions:start -->
 - openvibe-contracts: v0.129.0
-- openvibe-sdk: v0.38.0
+- openvibe-sdk: v0.38.1
 - openvibe-shared: v3.0.0
 <!-- versions:end -->
