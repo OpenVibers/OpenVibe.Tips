@@ -55,7 +55,7 @@ async function start() {
 
     const app = createApp({ config, db, valkey, registry });
     const { domain, keys, outbox } = app.locals;
-    keys.start();
+    keys.start().catch(() => { /* logged by the JWKS client */ });
 
     const timers = [];
     if (config.jobs.enabled) {

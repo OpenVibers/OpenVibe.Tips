@@ -65,7 +65,7 @@ async function boot(opts = {}) {
     const ownValkey = opts.valkey === undefined && process.env.TIPS_TEST_STORE === 'pg' ? testValkey() : null;
     const valkey = opts.valkey || ownValkey;
     const app = createApp({ config, db: store.db, valkey, now: () => Date.now() + clock.offset, log, ...(opts.appOpts || {}) });
-    await app.locals.keys.load();
+    await app.locals.keys.refresh();
     const server = await new Promise((resolve) => { const s = http.createServer(app); s.listen(0, '127.0.0.1', () => resolve(s)); });
     const base = `http://127.0.0.1:${server.address().port}`;
     const domain = app.locals.domain;
