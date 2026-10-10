@@ -48,7 +48,7 @@ function createTipsReadiness({ db, valkey = null, keys, config, outbox, release 
         checks: [
             { name: 'db', required: true, check: () => db.ready() },
             { name: 'valkey', required: false, check: () => (valkey ? valkey.ready() : skip('VALKEY_URL unset: limits, overlay fan-out and stream slots are per process (one process only)')) },
-            { name: 'network_jwks', required: false, check: () => (keys.get() ? true : 'Network signing key not loaded yet: tokens cannot be verified') },
+            { name: 'network_jwks', required: false, check: () => (keys.ready() ? true : 'Network signing key not loaded yet: tokens cannot be verified') },
             { name: 'billing', required: false, cacheMs: PING_TTL_MS, timeoutMs: 2500, check: probe(`${config.billing.url}/api/health`, fetchImpl) },
             { name: 'events', required: false, cacheMs: outbox.enabled ? PING_TTL_MS : 0, timeoutMs: 2500, check: events },
         ],
