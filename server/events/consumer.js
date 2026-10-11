@@ -69,7 +69,7 @@ function consumerRouter({ domain, config, log = console, accountData = null, acc
         if (!delivery) return http.sendProblem(res, 401, 'tips.bad_signature', { detail: 'X-OpenVibe-Signature does not verify', ctx: req.ov });
         const event = delivery.event;
         if (!event || typeof event.event_id !== 'string' || !/^evt_[0-9A-HJKMNP-TV-Z]{26}$/.test(event.event_id)) {
-            return http.sendProblem(res, 400, 'tips.bad_delivery', { detail: 'body must be { event: <envelope>, seq }', ctx: req.ov });
+            return http.sendProblem(res, 400, 'tips.bad_delivery', { detail: 'body must be { event: <envelope> }', ctx: req.ov });
         }
         let out;
         try {
