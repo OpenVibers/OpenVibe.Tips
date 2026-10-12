@@ -332,7 +332,7 @@ shown separately, with the privacy chosen), `/receipts/export`, `/receipts/erase
 (the creator and their moderators), `/moderate/invite/<secret>` · `/dashboard` (page settings, public pages, moderation,
 goals, overlay links shown once, alert settings, simulation, totals, recent tips, overlay deliveries) ·
 `/robots.txt`, `/sitemap.xml` (switched-on pages only) · `/release.json` · `/terms`, `/privacy`, `/dmca`.
-Signed-in forms carry an HMAC anti-forgery token and a per-render nonce. Shared chrome: Network
+Signed-in forms carry an HMAC anti-forgery token and a per-render nonce. OpenVibe Frame: Network
 `navbar.js`, `openvibe-shared` app icon, SSR footer and `<noscript>` navigation.
 
 ## Security
