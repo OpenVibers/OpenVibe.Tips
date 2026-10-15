@@ -80,6 +80,9 @@ function createApp(opts = {}) {
     const metrics = require('openvibe-shared/metrics').instrument(app, {
         service: 'tips', release: release.release, registry, skip: (req) => /^\/overlay\/[^/]+\/events$/.test(req.path),
     });
+    // Request telemetry (openvibe-sdk/service): a no-op until server/index.js calls telemetry.init(); an overlay's event
+    // stream lasts as long as the overlay is open, so it is not a request latency (as for the metrics above).
+    { const { telemetry } = require('openvibe-sdk/service'); app.use((req, res, next) => (/^\/overlay\/[^/]+\/events$/.test(req.path) ? next() : telemetry.middleware(req, res, next))); }
     app.use(http.middleware());
     app.use((req, res, next) => {
         res.setHeader('X-Content-Type-Options', 'nosniff');
