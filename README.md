@@ -351,6 +351,14 @@ goals, overlay links shown once, alert settings, simulation, totals, recent tips
 Signed-in forms carry an HMAC anti-forgery token and a per-render nonce. OpenVibe Frame: Network
 `navbar.js`, `openvibe-shared` app icon, SSR footer and `<noscript>` navigation.
 
+**Other ways to support** (since 2026-10-17, openvibe-contracts 0.202.0 `support_links`; owner 10-08: Billing is provider
+agnostic, creators bring their own links): a creator lists where else people pay them (Ko-fi, PayPal.me, Patreon, Buy Me
+a Coffee, Cash App, Venmo, GitHub Sponsors, Liberapay, Open Collective, Streamlabs and StreamElements tip pages; at most
+8) from the dashboard or `PATCH /api/v1/profiles/:creator {support_links: [{provider, handle}]}`. The tip page shows them
+as paid outside OpenVibe (never held, never counted toward goals), `rel="nofollow noopener ugc"`. A link is a known
+service plus a handle, and Tips builds the URL ([server/domain/support-links.js](server/domain/support-links.js)): a
+pasted link counts only on that service's own host, so a profile cannot carry a look-alike payment page.
+
 ## Security
 
 Reporting a vulnerability: [SECURITY.md](SECURITY.md). Tips never moves money (ADR-012): it holds

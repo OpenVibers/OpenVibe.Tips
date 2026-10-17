@@ -8,6 +8,7 @@
 const showcase = require('openvibe-shared/showcase');
 const { esc } = require('./layout');
 const { VOICES } = require('../domain/profiles');
+const supportLinks = require('../domain/support-links');
 
 const n = (v) => Number(v || 0).toLocaleString('en-US');
 const when = (s) => (s ? esc(String(s).replace('T', ' ').slice(0, 16)) + ' UTC' : '');
@@ -128,6 +129,16 @@ function tipForm({ profile, goals, viewer, csrf, idem, values = {}, providers, e
 </form>`;
 }
 
+/** Other ways to support, paid outside OpenVibe (domain/support-links.js builds every link; none is user-written). */
+function supportLinksSection(profile) {
+    const links = supportLinks.present(profile.support_links);
+    if (!links.length) return '';
+    return `<section class="card support-links"><h2>Other ways to support ${esc(profile.display_name)}</h2>
+  <ul class="support-list">${links.map((l) => `<li><a class="btn ghost" href="${esc(l.url)}" rel="nofollow noopener ugc" target="_blank">${esc(l.label)}</a></li>`).join('')}</ul>
+  <p class="fine">These are paid outside OpenVibe: OpenVibe never sees or holds them, and they do not count toward goals.</p>
+</section>`;
+}
+
 function creatorPage({ profile, goals, viewer, csrf, idem, values, providers, error, ownerPreview, sounds = [] }) {
     const active = goals.filter((g) => g.status === 'active');
     return `${ownerPreview ? '<p class="notice">Your page is switched off: only you can see it, and search engines are told not to index it. Switch it on in the <a href="/dashboard">dashboard</a>.</p>' : ''}
@@ -137,7 +148,8 @@ function creatorPage({ profile, goals, viewer, csrf, idem, values, providers, er
   <p class="links"><a href="https://openvibe.live/@${esc(profile.handle)}">Watch on OpenVibe.Live</a> · <a href="/${esc(profile.handle)}/goals">Goals</a>${profile.page.supporters_page ? ` · <a href="/${esc(profile.handle)}/supporters">Supporters</a>` : ''}</p></div>
 </section>
 ${active.length ? `<section><h2>Goals</h2>${active.map(goalCard).join('')}</section>` : ''}
-${tipForm({ profile, goals, viewer, csrf, idem, values, providers, error, sounds })}`;
+${tipForm({ profile, goals, viewer, csrf, idem, values, providers, error, sounds })}
+${supportLinksSection(profile)}`;
 }
 
 function goalsPage({ profile, goals }) {
@@ -236,6 +248,19 @@ function soundsCard({ profile: p, sounds, csrf, idem }) {
 </section>`;
 }
 
+/** The dashboard's other ways to support: one field per known service (a name, or the creator's link there). */
+function supportLinksCard({ profile: p, csrf, idem }) {
+    const have = new Map(supportLinks.present(p.support_links).map((l) => [l.provider, l.handle]));
+    const hint = { kofi: 'ko-fi.com/…', paypal: 'paypal.me/…', patreon: 'patreon.com/…', buymeacoffee: 'buymeacoffee.com/…', cashapp: 'cash.app/$…', venmo: 'venmo.com/u/…', github: 'github.com/sponsors/…', liberapay: 'liberapay.com/…', opencollective: 'opencollective.com/…', streamlabs: 'streamlabs.com/…/tip', streamelements: 'streamelements.com/…/tip' };
+    return `<section class="card" id="support-links"><h2>Other ways to support you</h2>
+  <p>Your tip page can link to where else people pay you. Type your name on each service you use, or paste your link there; leave the rest blank. Up to ${supportLinks.MAX_LINKS}. These payments happen outside OpenVibe and do not count toward goals.</p>
+  <form method="post" action="/dashboard/support-links" class="support-form">${hidden({ csrf, idem: `${idem}-sl` })}
+    ${Object.entries(supportLinks.PROVIDERS).map(([k, v]) => `<label>${esc(v.label)} <input type="text" name="link_${k}" maxlength="200" autocomplete="off" spellcheck="false" placeholder="${esc(hint[k] || '')}" value="${esc(have.get(k) || '')}"></label>`).join('\n    ')}
+    <button class="btn" type="submit">Save links</button>
+  </form>
+</section>`;
+}
+
 function dashboard({ profile, goals, tokens, configs, totals, recent, deliveries, csrf, idem, flash, error, connected, chatAdapter, mod = {}, sounds = [] }) {
     const p = profile;
     const f = (k) => (p[k] ? ' checked' : '');
@@ -247,7 +272,7 @@ ${flash ? `<p class="notice">${esc(flash)}</p>` : ''}${errorBox(error)}
   <div class="card"><h2>Totals</h2>
     <p class="big">${n(totals.settled_via_billing)} <small>Vibes settled through Billing</small></p>
     <p>${n(totals.external)} Vibes-equivalent tipped on your own PowerChat · ${n(totals.interactions)} tips · ${n(totals.pending)} pending</p>
-    <p class="fine">Simulations (${n(totals.simulations)}) are never counted. Your balance and cash-outs are on OpenVibe.Live until Billing takes over.</p>
+    <p class="fine">Simulations (${n(totals.simulations)}) are never counted. OpenVibe.Billing keeps your Vibes: your balance and cash-outs are in <a href="https://openvibe.live/#vibes">your Vibes</a>.</p>
   </div>
   <div class="card"><h2>Your page</h2>
     <p><a href="/${esc(p.handle)}">openvibe.tips/${esc(p.handle)}</a> — ${p.page_enabled ? 'on and indexable' : 'off (only you can see it)'}</p>
@@ -280,6 +305,7 @@ ${flash ? `<p class="notice">${esc(flash)}</p>` : ''}${errorBox(error)}
   </div>
 </section>
 ${soundsCard({ profile: p, sounds, csrf, idem })}
+${supportLinksCard({ profile: p, csrf, idem })}
 <section class="card"><h2>Goals</h2>
   ${goals.length ? goals.map((g) => `${goalCard(g)}${g.status === 'active' ? `<form class="inline" method="post" action="/dashboard/goals/${esc(g.id)}">${hidden({ csrf, idem: `${idem}-g-${g.id}`, revision: g.revision })}
     <label>Title <input name="title" maxlength="120" value="${esc(g.title)}"></label><label>Target <input type="number" name="target_amount" min="1" value="${g.target_amount}"></label>

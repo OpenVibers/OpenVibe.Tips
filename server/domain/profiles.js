@@ -22,6 +22,7 @@
 const { sql } = require('openvibe-sdk/db');
 const { fail, iso, text } = require('../util');
 const filterLib = require('./filter');
+const supportLinks = require('./support-links');
 
 const HANDLE_RE = /^[a-z0-9][a-z0-9_.-]{0,39}$/;
 // Paths the site itself uses; no creator page can take them.
@@ -165,6 +166,7 @@ function createProfiles(ctx) {
             }
             if (f.links !== undefined) set.filter_links = on(f.links);
         }
+        if (patch.support_links !== undefined) set.support_links = sql.json(supportLinks.normalize(patch.support_links));
         if (patch.display_name !== undefined) {
             const n = text(patch.display_name, 'display_name', 80);
             if (!n) fail(422, 'tips.invalid_input', 'display_name cannot be empty');
@@ -205,6 +207,8 @@ function createProfiles(ctx) {
             media_requests: { enabled: p.media_requests_enabled, max_seconds: p.media_max_seconds },
             // The sounds themselves: GET /api/v1/profiles/:creator/sounds (and the public page).
             sounds: { enabled: !!p.sounds_enabled },
+            // Other ways to support, paid outside OpenVibe (support-links.js): Tips builds each link.
+            support_links: supportLinks.present(p.support_links),
             page: p.page,
             supporters_url: p.page.supporters_page ? `${ctx.config.baseUrl}/${p.handle}/supporters` : null,
             currency: 'vibes-bits',
