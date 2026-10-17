@@ -2,11 +2,13 @@
 
 > Creator support: tips, goals, paid messages, TTS, media requests and paid sounds, overlays.
 
-**Status:** alpha — runtime built and tested against stubs (roadmap Wave 9). Deployed internally, not
-launched: running on the host since 2026-09-23 on `127.0.0.1:4610` only, with no
-creator profile yet, with no public route. OpenVibe.Live remains where tips happen until the Billing cutover (see *What waits*).
+**Status:** alpha — **launched 2026-10-17** at [openvibe.tips](https://openvibe.tips) (openvibe-contracts 0.200.0), right
+after the Billing cutover made OpenVibe.Billing the money ledger. Tips posts its chat lines and alerts through
+OpenVibe.Chat (`TIPS_CHAT_ADAPTER=chat`), records a streamer's own PowerChat tips from Billing, and OpenVibe.Live
+moves its channel goal and tip history from `tips.interaction.ready`. Paid sounds since the same day. On launch day
+production held the 139 interactions imported from Live and no creator profile yet.
 Data: PostgreSQL through PgBouncer, and Valkey for shared state ([ADR-035](https://github.com/OpenVibers/OpenVibe.Contracts/blob/main/docs/adr/ADR-035-postgresql-and-valkey.md));  
-**Domain:** `openvibe.tips` (keeps its OpenVibe.Sites placeholder until the launch rule below holds)  
+**Domain:** `openvibe.tips`  
 **Port / service id:** 4610 / `tips`  
 **Decision:** [ADR-012](https://github.com/OpenVibers/OpenVibe.Contracts/blob/main/docs/adr/ADR-012-economic-classification.md) — Tips never moves money; Billing does.  
 **Plan:** OpenVibe End-to-End Realignment & Implementation Plan, revision 3 (20 Sep 2026), §11.2; roadmap Wave 9, §15.11, §29.  
@@ -83,10 +85,9 @@ npm run test:pg                 # every test file through PgBouncer and Valkey
 npm run subscribe               # create the billing.transaction.* and billing.receipt.* subscriptions in OpenVibe.Events
 ```
 
-Production (deployed, loopback only): `/opt/openvibe.tips`, env `/etc/openvibe/tips.env`, unit
-[deploy/systemd/openvibe-tips.service](deploy/systemd/openvibe-tips.service) (state in `/var/lib/openvibe-tips`).
-The vhost [deploy/nginx/openvibe.tips.conf](deploy/nginx/openvibe.tips.conf) is not installed yet:
-`openvibe.tips` still serves the Sites placeholder.
+Production: `/opt/openvibe.tips`, env `/etc/openvibe/tips.env`, unit
+[deploy/systemd/openvibe-tips.service](deploy/systemd/openvibe-tips.service) (state in `/var/lib/openvibe-tips`),
+vhost [deploy/nginx/openvibe.tips.conf](deploy/nginx/openvibe.tips.conf) (installed 2026-10-17: `openvibe.tips` serves Tips).
 
 ## Design
 
@@ -328,10 +329,9 @@ minutes); a creator with no Live account fails at once. The body is rebuilt on e
 interaction's current public view, so a word-filter change between attempts makes Chat answer 409, which
 fails the effect. A job carries the interaction's public view and `privacy`: "Anonymous" and no subject
 for an anonymous supporter, `amount: null` and a line without the amount when it is hidden, no private
-message. `test` records jobs in memory (development; simulations always use it). `none` (the production
-default) creates no chat effects, and it is what production runs. To enable delivery: grant the `tips`
-principal the three capabilities above, then set `TIPS_CHAT_ADAPTER=chat` (and `TIPS_CHAT_URL` when Chat
-is not on `127.0.0.1:4400`).
+message. `test` records jobs in memory (development; simulations always use it). `none` (the default) creates
+no chat effects. Production runs `chat` since the launch (2026-10-17): the `tips` principal holds the three
+capabilities above (`TIPS_CHAT_URL` only when Chat is not on `127.0.0.1:4400`).
 
 ## Pages (server-rendered, useful without JavaScript)
 
@@ -406,18 +406,15 @@ With `VALKEY_URL` every process counts one caller together (`test/integration.te
 
 ## What waits
 
-- **Billing cutover** (Billing README runbook): until Live's money writes go through Billing, real tips
-  still happen on Live; Tips can only record them from Billing events once Live sends donations as
-  Billing transfers. For PowerChat checkout, Billing answers with a `checkout_ref` and no URL — Tips needs
-  `TIPS_POWERCHAT_LINK_TEMPLATE` or Billing returning the link.
-- **EXTERNAL PowerChat tips** arrive as `billing.receipt.external` once Billing is the authority. They need
-  the `billing.receipt.*` subscription (`npm run subscribe`) and `TIPS_CHAT_ADAPTER=chat`; the chat
-  adapter posts the chat line and plays the alert but does not advance **Live's own**
-  `donation_goals` or send its `goal-update`/`goal-reached` frames (Tips' goals and overlay do advance).
+- **PowerChat checkout from openvibe.tips**: Billing answers a PowerChat checkout with a `checkout_ref` and no
+  URL, and `TIPS_POWERCHAT_LINK_TEMPLATE` is not set in production, so supporters on openvibe.tips pay with Vibes
+  credit. (Tips on a streamer's own PowerChat page do arrive: `billing.receipt.external`, see below.)
+- **EXTERNAL PowerChat tips** arrive as `billing.receipt.external` since the Billing cutover (2026-10-17), through
+  the `billing.receipt.*` subscription; the chat adapter posts the chat line and plays the alert, and Live advances
+  its own channel goal and tip history from `tips.interaction.ready` (OpenVibe.Live `server/tips/tips-events.js`).
   PowerChat follow/host/channel-points/subscription notices are not forwarded by anyone.
-- **Chat**: `TIPS_CHAT_ADAPTER=chat` needs the Network to grant `tips` `chat.message.send` and
-  `chat.event.publish` (audience `openvibe.chat`) and `identity.subject.resolve`. Paid media requests have
-  no delivery route (Chat does not own the media queue): with `chat` they are recorded failed.
+- **Paid media requests** have no delivery route (Chat does not own the media queue): with `chat` they are
+  recorded failed.
 - **Refunds of paid media requests** that never played (Billing's `POST /transfers/:id/refund`) are not
   offered in Tips yet; a refund made elsewhere arrives as `billing.transaction.reversed` and is applied.
 - Legal pages use the shared `ugc` profile, which does not describe payments.
@@ -428,16 +425,15 @@ Production deploys with `sudo ovhost deploy tips` on the host (strategy `git-che
 fast-forward `/opt/openvibe.tips`, install on a lockfile change, restart, wait for `/api/ready`).
 The unit is `openvibe-tips.service` on `127.0.0.1:4610`, the env file `/etc/openvibe/tips.env`. State lives in
 `/var/lib/openvibe-tips`. The vhost [deploy/nginx/openvibe.tips.conf](deploy/nginx/openvibe.tips.conf)
-waits for the launch: `openvibe.tips` serves the Sites placeholder.
+serves `openvibe.tips` since the launch (2026-10-17).
 Rollback: ovhost puts the previous sha back by itself when `/api/ready` does not answer 2xx after the
 restart; afterwards `sudo ovhost rollback tips --to <sha>`. Migrations are expand-only until a
 `contract` migration, which waits out the 7-day N-1 window.
 
 ## Launch rule
 
-This repository does not make the product real, and the domain keeps its placeholder page on
-[OpenVibers/OpenVibe.Sites](https://github.com/OpenVibers/OpenVibe.Sites) until all of the following
-exist here (plan §12.12):
+Held on 2026-10-17, when `openvibe.tips` launched (openvibe-contracts 0.200.0 made Tips `live`; Network stopped
+parking the domain). The rule, as written before the launch (plan §12.12):
 
 1. an owning runtime with health/readiness endpoints and observability — ✔ `/api/health`, `/api/ready`
    (openvibe-shared/ready: the database required and reporting the store that answered; Valkey, the
@@ -446,15 +442,14 @@ exist here (plan §12.12):
 2. canonical identity/auth integration (Network subjects, scoped service principals) — ✔; the `tips`
    principal is provisioned on the host;
 3. server-rendered public routes useful without JavaScript — ✔;
-4. real persistence and end-to-end workflows — ✔ against stubs; not yet against the real Billing and
-   Events (Billing is in shadow and has sent no events; production has no creator profile yet);
+4. real persistence and end-to-end workflows — ✔, against the real Billing and Events since the cutover
+   (2026-10-17);
 5. capability and event registration against OpenVibe.Contracts — ✔ v0.15.0, payload schemas in v0.30.2 and v0.32.0 (v0.79.0 pinned);
 6. a migration/seed strategy ✔, a written threat review ✔ ([docs/threat-review.md](docs/threat-review.md),
    internal; an independent review is still due), and sitemap/robots ✔ (no feed);
 7. acceptance tests proving the advertised functionality — ✔ (table above).
 
-The launch release removes the domain from `OpenVibe.Sites/sites.json`, switches routing and registers
-maturity in the ecosystem registry atomically. A placeholder is never counted as an implemented service.
+A placeholder is never counted as an implemented service.
 
 ---
 
