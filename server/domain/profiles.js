@@ -107,9 +107,9 @@ function createProfiles(ctx) {
 
     const LIMITS = {
         min_amount: [1, 1_000_000], paid_message_min: [1, 1_000_000], tts_min_amount: [1, 1_000_000],
-        media_request_min: [1, 1_000_000], media_max_seconds: [10, 3 * 3600],
+        media_request_min: [1, 1_000_000], media_max_seconds: [10, 3 * 3600], sound_min: [1, 1_000_000],
     };
-    const BOOLS = ['page_enabled', 'accepting', 'tts_enabled', 'media_requests_enabled'];
+    const BOOLS = ['page_enabled', 'accepting', 'tts_enabled', 'media_requests_enabled', 'sounds_enabled'];
     const on = (v) => v === true || v === 'on' || v === '1' || v === 1;
 
     /**
@@ -197,9 +197,14 @@ function createProfiles(ctx) {
         const out = {
             creator: { type: 'user', id: p.creator_subject }, handle: p.handle, display_name: p.display_name, avatar_url: p.avatar_url || null,
             headline: p.headline || null, page_enabled: p.page_enabled, accepting: p.accepting, url: `${ctx.config.baseUrl}/${p.handle}`,
-            minimums: { tip: p.min_amount, paid_message: p.paid_message_min, tts: p.tts_enabled ? p.tts_min_amount : null, media_request: p.media_requests_enabled ? p.media_request_min : null },
+            minimums: {
+                tip: p.min_amount, paid_message: p.paid_message_min, tts: p.tts_enabled ? p.tts_min_amount : null,
+                media_request: p.media_requests_enabled ? p.media_request_min : null, sound: p.sounds_enabled ? Number(p.sound_min) : null,
+            },
             tts: { enabled: p.tts_enabled, max_chars: p.tts_max_chars, voice: p.tts_voice },
             media_requests: { enabled: p.media_requests_enabled, max_seconds: p.media_max_seconds },
+            // The sounds themselves: GET /api/v1/profiles/:creator/sounds (and the public page).
+            sounds: { enabled: !!p.sounds_enabled },
             page: p.page,
             supporters_url: p.page.supporters_page ? `${ctx.config.baseUrl}/${p.handle}/supporters` : null,
             currency: 'vibes-bits',

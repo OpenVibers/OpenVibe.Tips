@@ -35,6 +35,7 @@ const { asyncRouter } = require('./async-router');
 const pages = require('./pages');
 const { asset } = require('./layout');
 const { PAGE_DEFAULTS } = require('../domain/profiles');
+const multipart = require('./multipart');
 
 // The sitemap's lastmod: when this server booted — a real date, computed once, never per request.
 const BOOT_AT = new Date().toISOString();
@@ -51,7 +52,7 @@ const RECEIPT_FLASH = new Set(['Your data was erased from your tips']);
 function createWebRoutes({ domain, config, layout, userAuth }) {
     // Every handler below may be async: its errors reach the app's error handler (the 500 page).
     const r = asyncRouter(express.Router());
-    const { profiles, goals, interactions, overlays, moderation, db } = domain;
+    const { profiles, goals, interactions, overlays, moderation, sounds, db } = domain;
     const withViewer = viewerMiddleware(userAuth);
     const form = express.urlencoded({ extended: false, limit: '32kb' });
     const secret = config.formSecret || crypto.randomBytes(32).toString('hex');
@@ -205,11 +206,12 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
             configs = await overlays.listConfigs(db, p.creator_subject);
         }
         const s = p.creator_subject;
-        const [recentRows, goalRows, tokens, totals, deliveries, connected, held, moderators, invites, log, moderating] = await Promise.all([
+        const [recentRows, goalRows, tokens, totals, deliveries, connected, held, moderators, invites, log, moderating, soundList] = await Promise.all([
             interactions.list(db, { creator: s, limit: 20 }).then((out) => interactions.presentMany(db, out.rows, { viewer: 'owner' })),
             goals.list(db, s).then((list) => goals.presentMany(db, list)),
             overlays.listTokens(db, s), interactions.totals(db, s), overlays.recentDeliveries(db, s, 20), overlays.connected(s),
             moderation.heldCount(db, s), moderation.listModerators(db, s), moderation.openInvites(db, s), moderation.log(db, s, 20), moderation.moderatedBy(db, req.viewer.subject),
+            sounds.list(db, s),
         ]);
         html(res, pageFor(req, {
             title: 'Dashboard', active: 'dashboard', robots: 'noindex,nofollow', canonicalPath: '/dashboard',
@@ -219,6 +221,7 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
                 deliveries, csrf: csrfFor(req.viewer.subject), idem: idem(), flash, error,
                 connected, chatAdapter: config.chat.adapter,
                 mod: { held, moderators: moderators.map(moderation.presentModerator), invites, log, moderating },
+                sounds: soundList,
             }),
         }), status);
     }
@@ -248,6 +251,7 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
         const b = req.body;
         await profiles.update(p.creator_subject, {
             page_enabled: bool(b.page_enabled), accepting: bool(b.accepting), tts_enabled: bool(b.tts_enabled), media_requests_enabled: bool(b.media_requests_enabled),
+            sounds_enabled: bool(b.sounds_enabled), sound_min: b.sound_min,
             headline: b.headline, min_amount: b.min_amount, paid_message_min: b.paid_message_min, tts_min_amount: b.tts_min_amount, tts_max_chars: b.tts_max_chars,
             tts_voice: b.tts_voice, media_request_min: b.media_request_min, media_max_seconds: b.media_max_seconds,
             page: Object.fromEntries(Object.keys(PAGE_DEFAULTS).map((k) => [k, bool(b[`page_${k}`])])),
@@ -296,8 +300,40 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
         await interactions.simulate(p, {
             kind: b.kind, amount: b.amount, message: b.message, supporter_name: b.supporter_name,
             tts: b.kind === 'tts' ? { text: b.message } : undefined, media: b.kind === 'media_request' ? { url: b.media_url } : undefined,
+            sound: b.kind === 'sound' ? { id: b.sound_id } : undefined,
         }, { by: req.viewer.subject });
         return { done: 'Test sent — check your overlay' };
+    });
+
+    // ── Paid sounds (domain/sounds.js) ───────────────────────
+    // The upload is the one multipart form: read whole (bounded), parsed by ./multipart, refused when malformed.
+    const upload = express.raw({ type: 'multipart/form-data', limit: `${Math.ceil(sounds.MAX_BYTES / 1024) + 64}kb` });
+    r.post('/dashboard/sounds', withViewer, upload, async (req, res) => {
+        if (!req.viewer) return res.redirect(`/auth/login?next=${encodeURIComponent('/dashboard')}`);
+        const parsed = multipart.parse(req.body, req.get('content-type'));
+        req.body = parsed ? parsed.fields : {};
+        if (!csrfOk(req)) return await renderDashboard(req, res, { error: 'That form expired. Please try again.', status: 403 });
+        try {
+            if (!parsed || !parsed.file || !parsed.file.data.length) throw new TipsError(422, 'tips.invalid_sound', 'Choose a sound file to upload.');
+            const p = await ensureProfile(req);
+            await sounds.add(p.creator_subject, { name: parsed.fields.name || String(parsed.file.filename || '').replace(/\.[a-z0-9]{1,5}$/i, ''), data: parsed.file.data });
+            return res.redirect(303, `/dashboard?done=${encodeURIComponent('Sound added')}#sounds`);
+        } catch (e) {
+            if (e instanceof TipsError) return await renderDashboard(req, res, { error: e.detail || e.message, status: e.status >= 500 ? 500 : 400 });
+            throw e;
+        }
+    });
+    action('/dashboard/sounds/:id/delete', async (req, p) => { await sounds.remove(p.creator_subject, req.params.id); return { done: 'Sound deleted' }; });
+    // A sound's file never changes (no edit, only delete), so it is cached for good. Its own audio type, no sniffing,
+    // and a CSP that runs nothing: it is a file a creator uploaded.
+    r.get('/sounds/:id', async (req, res, next) => {
+        const row = await sounds.get(db, req.params.id);
+        if (!row) return next();
+        res.status(200).set({
+            'Content-Type': row.mime, 'Content-Length': String(row.data.length), 'Cache-Control': 'public, max-age=31536000, immutable',
+            'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; sandbox", 'Cross-Origin-Resource-Policy': 'same-origin',
+            'Content-Disposition': `inline; filename="${row.id}.${sounds.EXT[row.mime] || 'bin'}"`, ETag: `"${row.sha256}"`,
+        }).end(row.data);
     });
 
     // ── Overlays (token in the path; no cookies involved) ────
@@ -430,7 +466,7 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
             title: `Support ${p.display_name}`, active: 'creator', canonicalPath: `/${p.handle}`,
             description: p.headline || `Tip ${p.display_name} on OpenVibe.Tips: tips, goals, paid messages${p.tts_enabled ? ', text-to-speech' : ''}${p.media_requests_enabled ? ', media requests' : ''}.`,
             robots: p.page_enabled ? 'index,follow' : 'noindex,nofollow', ogImage: p.avatar_url || undefined, jsonLd,
-            body: pages.creatorPage({ profile: p, goals: list, viewer: req.viewer, csrf, idem: idem(), values, providers, error, ownerPreview: !p.page_enabled }),
+            body: pages.creatorPage({ profile: p, goals: list, viewer: req.viewer, csrf, idem: idem(), values, providers, error, ownerPreview: !p.page_enabled, sounds: p.sounds_enabled ? await sounds.list(db, p.creator_subject) : [] }),
         }), status, p.page_enabled ? {} : { 'X-Robots-Tag': 'noindex, nofollow' });
     }
     r.get('/:handle', withViewer, async (req, res, next) => (profiles.normalizeHandle(req.params.handle) ? await creatorView(req, res) : next()));
@@ -466,7 +502,7 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
         if (!req.viewer) return res.redirect(303, `/auth/login?next=${encodeURIComponent(`/${p.handle}`)}`);
         const b = req.body || {};
         const values = {
-            kind: b.kind, amount: b.amount, message: b.message, tts_text: b.tts_text, tts_voice: b.tts_voice, media_url: b.media_url, goal_id: b.goal_id, pay_with: b.pay_with,
+            kind: b.kind, amount: b.amount, message: b.message, tts_text: b.tts_text, tts_voice: b.tts_voice, media_url: b.media_url, sound_id: b.sound_id, goal_id: b.goal_id, pay_with: b.pay_with,
             supporter_name: b.supporter_name, anonymous: bool(b.anonymous), hide_amount: bool(b.hide_amount), private_message: bool(b.private_message),
         };
         if (!csrfOk(req)) return await creatorView(req, res, { values, error: 'That form expired. Please send it again.', status: 403 });
@@ -478,6 +514,7 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
                 kind: b.kind || 'tip', amount: b.amount, message: b.message, goal_id: b.goal_id || undefined,
                 tts: b.kind === 'tts' ? { text: b.tts_text || b.message, voice: b.tts_voice } : undefined,
                 media: b.kind === 'media_request' ? { url: b.media_url } : undefined,
+                sound: b.kind === 'sound' ? { id: b.sound_id } : undefined,
                 privacy: { anonymous: values.anonymous, hide_amount: values.hide_amount, private_message: values.private_message },
             };
             const funding = b.pay_with === 'checkout' ? 'checkout' : 'credit';

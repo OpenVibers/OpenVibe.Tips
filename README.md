@@ -1,6 +1,6 @@
 # OpenVibe.Tips
 
-> Creator support: tips, goals, paid messages, TTS and media requests, overlays.
+> Creator support: tips, goals, paid messages, TTS, media requests and paid sounds, overlays.
 
 **Status:** alpha — runtime built and tested against stubs (roadmap Wave 9). Deployed internally, not
 launched: running on the host since 2026-09-23 on `127.0.0.1:4610` only, with no
@@ -21,7 +21,7 @@ from *interaction delivered*.
 ## Owns
 
 - `tip_interactions`, `creator_tip_profiles`, `tip_goals`, `tip_goal_contributions`, `paid_messages`,
-  `paid_media_requests`, `overlay_configs`, `overlay_deliveries`, `interaction_effects`
+  `paid_media_requests`, `creator_sounds`, `overlay_configs`, `overlay_deliveries`, `interaction_effects`
   (its own PostgreSQL database `ov_tips`, schema in [migrations/](migrations/), access in `server/db.js`) —
   interaction state and **references** to Billing transaction ids, never a mutable cash balance
 - revocable scoped overlay tokens (`overlay_tokens`, hashed at rest; never creator cookies)
@@ -55,9 +55,9 @@ from *interaction delivered*.
 
 ## Capabilities
 
-Implemented here (the service manifest's `capabilities`, 18 `tips.*` ids, audience `openvibe.tips`):
+Implemented here (the service manifest's `capabilities`, 19 `tips.*` ids, audience `openvibe.tips`):
 `tips.profile.get|update`, `tips.checkout.create`, `tips.superchat.create`, `tips.tts.request`,
-`tips.media_request.create`, `tips.interaction.get|list|record|moderate`, `tips.goal.create|update|close`,
+`tips.media_request.create`, `tips.sound.request`, `tips.interaction.get|list|record|moderate`, `tips.goal.create|update|close`,
 `tips.overlay.token.create|revoke`, `tips.overlay.config.get|update` and `tips.simulation.run`.
 
 Called elsewhere, as the service principal `tips`:
@@ -169,6 +169,8 @@ token as a Bearer and act on their own things only. The API never reads cookies.
 | `POST /paid-messages` | `tips.superchat.create` | the supporter |
 | `POST /tts-requests` `{…, tts: {text, voice}}` | `tips.tts.request` | the supporter |
 | `POST /media-requests` `{…, media: {url}}` | `tips.media_request.create` | the supporter |
+| `POST /sound-requests` `{…, sound: {id}}` | `tips.sound.request` | the supporter |
+| `GET /profiles/:creator/sounds` | `tips.profile.get` (switched-off pages) | anyone when the page is on; the owner |
 | `GET /interactions/:id` | `tips.interaction.get` | its creator or supporter |
 | `GET /interactions?creator=\|supporter=&cursor=` | `tips.interaction.list` | own receipts; `?as=creator` own tips |
 | `POST /interactions/external` `{creator, provider, provider_ref, amount_cents, supporter_name?, message?, announce?}` | `tips.interaction.record` | — |
@@ -308,6 +310,14 @@ with Tips' service token (audience `openvibe.chat`; OpenVibe.Chat `docs/chat-ing
 | | then `POST /internal/chat/events` (`chat.event.publish`) | `target { kind: channel, id }`, `frame { type: alert, streamerId, kind: donation }` (the alert sound) |
 | `tts` | `POST /internal/chat/messages` | a `tts` line (`message` = the filtered TTS text) with `tts { voice, identity_key: tips:<interaction>, key: tips-<interaction> }`: Chat saves it and reads it aloud |
 | `media_request` | none | fails at once: the media queue is not Chat's |
+
+**Paid sounds** (`kind: sound`, `server/domain/sounds.js`): a creator keeps up to 12 sounds (MP3, OGG or WAV of
+512 KB at most, recognised by their bytes), uploaded from the dashboard with a plain multipart form
+(`server/web/multipart.js`) and served from `/sounds/<id>` as their own audio type (`nosniff`, a sandboxing CSP,
+cached for good: a file never changes). With paid sounds on (`sounds_enabled`, minimum `sound_min`, 50 Vibes on a
+new page), a supporter picks one on the tip page or through `POST /api/v1/sound-requests`. After settlement the
+overlay alert carries the sound and the overlay plays it in place of the alert sound; the chat line reads
+"<name> played “<sound>” for N Vibes".
 
 Every body's `key` is the effect's delivery id (`<interaction>:<effect>`; the alert `<delivery id>:alert`):
 Chat applies a key once and answers a repeat with the first result, so a retry after a 5xx or a lost answer

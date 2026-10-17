@@ -59,8 +59,10 @@ dl.receipt dd { margin: 0; overflow-wrap: anywhere; }
 .creators a { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; background: var(--tips-card); text-decoration: none; color: inherit; }
 .creators img { border-radius: 50%; }
 .steps li { margin: 8px 0; }
-.js .tip-form .when-tts, .js .tip-form .when-media { display: none; }
-.js .tip-form[data-kind=tts] .when-tts, .js .tip-form[data-kind=media_request] .when-media { display: block; }
+.js .tip-form .when-tts, .js .tip-form .when-media, .js .tip-form .when-sound { display: none; }
+.js .tip-form[data-kind=tts] .when-tts, .js .tip-form[data-kind=media_request] .when-media, .js .tip-form[data-kind=sound] .when-sound { display: block; }
+.sounds .sound-pick { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.sounds audio { height: 32px; max-width: 100%; }
 .js .tip-form:not([data-kind=tip]) .when-tip { display: none; }
 ol.leaderboard { padding-left: 1.6em; }
 ol.leaderboard li, ul.supporters li { margin: 4px 0; }

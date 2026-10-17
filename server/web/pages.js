@@ -11,7 +11,7 @@ const { VOICES } = require('../domain/profiles');
 
 const n = (v) => Number(v || 0).toLocaleString('en-US');
 const when = (s) => (s ? esc(String(s).replace('T', ' ').slice(0, 16)) + ' UTC' : '');
-const KIND_LABEL = { tip: 'Tip', paid_message: 'Paid message', tts: 'Text-to-speech', media_request: 'Media request' };
+const KIND_LABEL = { tip: 'Tip', paid_message: 'Paid message', tts: 'Text-to-speech', media_request: 'Media request', sound: 'Sound' };
 const PAY_LABEL = { pending: 'Payment pending', settled: 'Paid', reversed: 'Reversed', failed: 'Payment failed' };
 const DELIVERY_LABEL = { awaiting_payment: 'Waiting for payment', queued: 'Being delivered', delivered: 'Delivered', failed: 'Delivery failed', cancelled: 'Cancelled' };
 
@@ -38,10 +38,10 @@ function errorBox(msg) { return msg ? `<p class="notice error" role="alert">${es
 
 /**
  * What a new tip page asks for until its creator changes it: migrations/0001_initial.sql's column defaults
- * (creator_tip_profiles.min_amount, paid_message_min, tts_min_amount, media_request_min). test/pages.test.js reads
+ * (creator_tip_profiles.min_amount, paid_message_min, tts_min_amount, media_request_min; sound_min in 0005). test/pages.test.js reads
  * the migration and fails if these drift, so the home page never quotes a number the service does not use.
  */
-const NEW_PAGE_MINIMUMS = Object.freeze({ tip: 1, paid_message: 100, tts: 100, media_request: 25 });
+const NEW_PAGE_MINIMUMS = Object.freeze({ tip: 1, paid_message: 100, tts: 100, media_request: 25, sound: 50 });
 const vibes = (n) => `${n} ${n === 1 ? 'Vibe' : 'Vibes'}`;
 
 /** The home: the product's own words (openvibe-shared/showcase), then the creators who switched their page on. */
@@ -62,12 +62,13 @@ function home({ creators }) {
             { icon: 'ov:chat', title: 'A paid message', text: 'Your message, highlighted in their chat.' },
             { icon: 'ov:audio', title: 'Text-to-speech', text: 'Your message read out on stream, where the creator turned it on.' },
             { icon: 'ov:video', title: 'A media request', text: 'A video for their stream, up to the length they allow, where they turned it on.' },
+            { icon: 'ov:audio', title: 'A sound', text: "One of the creator's sounds, played on stream by their overlay, where they turned it on." },
         ],
     }) + showcase.steps({
         title: 'How it works',
         items: [
             { title: 'Pick a creator', text: 'Every creator who switched their page on has one at openvibe.tips/name.' },
-            { title: 'Choose what to send', text: "A tip, a paid message, text-to-speech or a media request, within the creator's own limits." },
+            { title: 'Choose what to send', text: "A tip, a paid message, text-to-speech, a media request or a sound, within the creator's own limits." },
             { title: 'Pay with Vibes', text: 'From your Vibes balance, or through checkout. Payments are handled by OpenVibe.Billing; your receipt shows when the payment settled and when your message was delivered.' },
         ],
     }) + showcase.pricing({
@@ -78,6 +79,7 @@ function home({ creators }) {
             { name: 'Paid message', price: vibes(m.paid_message), items: ['Highlighted in chat', 'Shown by their stream overlay'] },
             { name: 'Text-to-speech', price: vibes(m.tts), items: ['Read out on stream', 'Only where the creator turned it on'] },
             { name: 'Media request', price: vibes(m.media_request), items: ['A video for their stream', 'Only where the creator turned it on'] },
+            { name: 'Sound', price: vibes(m.sound), items: ['Played on stream by their overlay', 'Only where the creator turned it on'] },
         ],
         note: "The creator's page shows their own minimums before you pay.",
     }) + `
@@ -85,11 +87,13 @@ ${creators.length ? `<section class="sc-sec" id="creators" aria-labelledby="crea
 }
 
 /** The tip form: every field works as a plain POST. */
-function tipForm({ profile, goals, viewer, csrf, idem, values = {}, providers, error }) {
+function tipForm({ profile, goals, viewer, csrf, idem, values = {}, providers, error, sounds = [] }) {
     const kinds = [['tip', 'Tip', profile.min_amount]];
     kinds.push(['paid_message', 'Paid message (highlighted in chat)', Math.max(profile.min_amount, profile.paid_message_min)]);
     if (profile.tts_enabled) kinds.push(['tts', 'Text-to-speech (read out on stream)', Math.max(profile.min_amount, profile.tts_min_amount)]);
     if (profile.media_requests_enabled) kinds.push(['media_request', 'Media request', Math.max(profile.min_amount, profile.media_request_min)]);
+    const soundsOn = profile.sounds_enabled && sounds.length > 0;
+    if (soundsOn) kinds.push(['sound', 'A sound (played on stream)', Math.max(profile.min_amount, Number(profile.sound_min))]);
     const kind = values.kind || 'tip';
     const active = goals.filter((g) => g.status === 'active');
     if (!profile.accepting) return `<section class="card"><p>${esc(profile.display_name)} is not accepting tips right now.</p></section>`;
@@ -105,6 +109,9 @@ function tipForm({ profile, goals, viewer, csrf, idem, values = {}, providers, e
   ${profile.tts_enabled ? `<div class="when-tts"><label>Text to read out <small>(up to ${profile.tts_max_chars} characters; the message is used when empty)</small><textarea name="tts_text" maxlength="${profile.tts_max_chars}" rows="2">${esc(values.tts_text || '')}</textarea></label>
   <label>Voice <select name="tts_voice">${VOICES.map((v) => `<option${v === (values.tts_voice || profile.tts_voice) ? ' selected' : ''}>${v}</option>`).join('')}</select></label></div>` : ''}
   ${profile.media_requests_enabled ? `<label class="when-media">Media link <small>(YouTube, up to ${Math.floor(profile.media_max_seconds / 60)} minutes)</small><input type="url" name="media_url" value="${esc(values.media_url || '')}" placeholder="https://www.youtube.com/watch?v=…"></label>` : ''}
+  ${soundsOn ? `<fieldset class="when-sound sounds"><legend>Which sound</legend>
+    ${sounds.map((x, i) => `<label class="sound-pick"><input type="radio" name="sound_id" value="${esc(x.id)}"${(values.sound_id ? values.sound_id === x.id : i === 0) ? ' checked' : ''}> ${esc(x.name)} <audio controls preload="none" src="${esc(x.url)}"></audio></label>`).join('\n    ')}
+  </fieldset>` : ''}
   ${active.length ? `<label>Count toward <select name="goal_id">${active.length > 1 ? '<option value="">No goal</option>' : ''}${active.map((g) => `<option value="${esc(g.id)}"${values.goal_id === g.id ? ' selected' : ''}>${esc(g.title)}</option>`).join('')}</select></label>` : ''}
   <fieldset class="pay"><legend>Pay with</legend>
     <label><input type="radio" name="pay_with" value="credit"${values.pay_with !== 'checkout' ? ' checked' : ''}> My Vibes balance</label>
@@ -121,7 +128,7 @@ function tipForm({ profile, goals, viewer, csrf, idem, values = {}, providers, e
 </form>`;
 }
 
-function creatorPage({ profile, goals, viewer, csrf, idem, values, providers, error, ownerPreview }) {
+function creatorPage({ profile, goals, viewer, csrf, idem, values, providers, error, ownerPreview, sounds = [] }) {
     const active = goals.filter((g) => g.status === 'active');
     return `${ownerPreview ? '<p class="notice">Your page is switched off: only you can see it, and search engines are told not to index it. Switch it on in the <a href="/dashboard">dashboard</a>.</p>' : ''}
 <section class="creator-head">
@@ -130,7 +137,7 @@ function creatorPage({ profile, goals, viewer, csrf, idem, values, providers, er
   <p class="links"><a href="https://openvibe.live/@${esc(profile.handle)}">Watch on OpenVibe.Live</a> · <a href="/${esc(profile.handle)}/goals">Goals</a>${profile.page.supporters_page ? ` · <a href="/${esc(profile.handle)}/supporters">Supporters</a>` : ''}</p></div>
 </section>
 ${active.length ? `<section><h2>Goals</h2>${active.map(goalCard).join('')}</section>` : ''}
-${tipForm({ profile, goals, viewer, csrf, idem, values, providers, error })}`;
+${tipForm({ profile, goals, viewer, csrf, idem, values, providers, error, sounds })}`;
 }
 
 function goalsPage({ profile, goals }) {
@@ -214,7 +221,22 @@ ${i.payment.state === 'pending' && i.funding === 'checkout' && !i.checkout?.url 
 <p class="fine">The payment state comes from OpenVibe.Billing. Delivery is tracked separately: a delivery problem never undoes a payment.</p>`;
 }
 
-function dashboard({ profile, goals, tokens, configs, totals, recent, deliveries, csrf, idem, flash, error, connected, chatAdapter, mod = {} }) {
+/** The dashboard's paid sounds: the list (with a player and a delete button) and the upload form (a plain multipart POST). */
+function soundsCard({ profile: p, sounds, csrf, idem }) {
+    const full = sounds.length >= 12;
+    return `<section class="card" id="sounds"><h2>Paid sounds</h2>
+  <p>Supporters pay to play one of these on stream; your overlay plays it with the alert${p.sounds_enabled ? '' : '. <b>Paid sounds are off</b>: switch them on in Your page above'}. MP3, OGG or WAV, up to 512 KB each, 12 at most.</p>
+  ${sounds.length ? `<ul class="sound-list">${sounds.map((x) => `<li><span class="sound-name">${esc(x.name)}</span> <audio controls preload="none" src="${esc(x.url)}"></audio>
+    <form method="post" action="/dashboard/sounds/${esc(x.id)}/delete">${hidden({ csrf, idem: `${idem}-sd-${x.id}` })}<button class="btn btn-small" type="submit">Delete</button></form></li>`).join('')}</ul>` : '<p class="muted">No sounds yet.</p>'}
+  ${full ? '<p class="muted">You have 12 sounds: delete one to add another.</p>' : `<form method="post" action="/dashboard/sounds" enctype="multipart/form-data" class="sound-upload">${hidden({ csrf, idem: `${idem}-su` })}
+    <label>Name <input type="text" name="name" maxlength="40" placeholder="Airhorn"></label>
+    <label>File <input type="file" name="file" accept="audio/mpeg,audio/ogg,audio/wav,.mp3,.ogg,.wav" required></label>
+    <button class="btn" type="submit">Add sound</button>
+  </form>`}
+</section>`;
+}
+
+function dashboard({ profile, goals, tokens, configs, totals, recent, deliveries, csrf, idem, flash, error, connected, chatAdapter, mod = {}, sounds = [] }) {
     const p = profile;
     const f = (k) => (p[k] ? ' checked' : '');
     const alertCfg = configs.find((c) => c.kind === 'alerts');
@@ -242,6 +264,8 @@ ${flash ? `<p class="notice">${esc(flash)}</p>` : ''}${errorBox(error)}
       <label><input type="checkbox" name="media_requests_enabled" value="1"${f('media_requests_enabled')}> Media requests</label>
       <label>Minimum media request <input type="number" name="media_request_min" min="1" value="${p.media_request_min}"></label>
       <label>Longest media (seconds) <input type="number" name="media_max_seconds" min="10" max="10800" value="${p.media_max_seconds}"></label>
+      <label><input type="checkbox" name="sounds_enabled" value="1"${f('sounds_enabled')}> Paid sounds <small>(your sounds, below, played by your overlay)</small></label>
+      <label>Minimum for a sound <input type="number" name="sound_min" min="1" value="${p.sound_min}"></label>
       <fieldset><legend>Public pages</legend>
         <label><input type="checkbox" name="page_goal_amounts" value="1"${p.page.goal_amounts ? ' checked' : ''}> Goals show their amounts <small>(off: the percentage only)</small></label>
         <label><input type="checkbox" name="page_goal_supporters" value="1"${p.page.goal_supporters ? ' checked' : ''}> Goals list their latest supporters</label>
@@ -255,6 +279,7 @@ ${flash ? `<p class="notice">${esc(flash)}</p>` : ''}${errorBox(error)}
     </form>
   </div>
 </section>
+${soundsCard({ profile: p, sounds, csrf, idem })}
 <section class="card"><h2>Goals</h2>
   ${goals.length ? goals.map((g) => `${goalCard(g)}${g.status === 'active' ? `<form class="inline" method="post" action="/dashboard/goals/${esc(g.id)}">${hidden({ csrf, idem: `${idem}-g-${g.id}`, revision: g.revision })}
     <label>Title <input name="title" maxlength="120" value="${esc(g.title)}"></label><label>Target <input type="number" name="target_amount" min="1" value="${g.target_amount}"></label>
@@ -293,11 +318,12 @@ ${moderationCard({ p, csrf, idem, mod })}
 <section class="card"><h2>Test your setup</h2>
   <p>Runs the whole path — overlay alert, goal widget, delivery — marked as a simulation. Nothing is charged and nothing is counted. ${chatAdapter === 'none' ? '' : 'Chat delivery of simulations stays inside Tips.'}</p>
   <form method="post" action="/dashboard/simulate">${hidden({ csrf, idem: `${idem}-s` })}
-    <label>Kind <select name="kind"><option value="tip">Tip</option><option value="paid_message">Paid message</option>${p.tts_enabled ? '<option value="tts">Text-to-speech</option>' : ''}${p.media_requests_enabled ? '<option value="media_request">Media request</option>' : ''}</select></label>
+    <label>Kind <select name="kind"><option value="tip">Tip</option><option value="paid_message">Paid message</option>${p.tts_enabled ? '<option value="tts">Text-to-speech</option>' : ''}${p.media_requests_enabled ? '<option value="media_request">Media request</option>' : ''}${p.sounds_enabled && sounds.length ? '<option value="sound">Sound</option>' : ''}</select></label>
     <label>Amount <input type="number" name="amount" min="1" value="${Math.max(p.min_amount, p.paid_message_min, 100)}"></label>
     <label>Name <input name="supporter_name" value="Test supporter" maxlength="80"></label>
     <label>Message <input name="message" value="This is a test alert" maxlength="300"></label>
     <label class="when-media">Media link (for a media request) <input type="url" name="media_url" placeholder="https://www.youtube.com/watch?v=…"></label>
+    ${p.sounds_enabled && sounds.length ? `<label>Sound (for a sound) <select name="sound_id">${sounds.map((x) => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('')}</select></label>` : ''}
     <button class="btn" type="submit">Send a test</button>
   </form>
 </section>

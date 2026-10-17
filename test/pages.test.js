@@ -41,10 +41,11 @@ const { boot, check, done } = require('./helpers/app');
     });
 
     await check('the home quotes the minimums a new page really starts with (the migration defaults)', () => {
-        const sql = require('fs').readFileSync(require('path').join(__dirname, '..', 'migrations', '0001_initial.sql'), 'utf8');
+        const read = (f) => require('fs').readFileSync(require('path').join(__dirname, '..', 'migrations', f), 'utf8');
+        const sql = read('0001_initial.sql') + read('0005_paid_sounds.sql');
         const def = (col) => Number((sql.match(new RegExp(`\\b${col}\\s+bigint NOT NULL DEFAULT (\\d+)`)) || [])[1]);
         const { NEW_PAGE_MINIMUMS: m } = require('../server/web/pages');
-        assert.deepStrictEqual(m, { tip: def('min_amount'), paid_message: def('paid_message_min'), tts: def('tts_min_amount'), media_request: def('media_request_min') });
+        assert.deepStrictEqual(m, { tip: def('min_amount'), paid_message: def('paid_message_min'), tts: def('tts_min_amount'), media_request: def('media_request_min'), sound: def('sound_min') });
     });
 
     await check('every page carries the boost marker and script, and the navbar signs in back to the current page', async () => {

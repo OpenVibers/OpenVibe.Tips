@@ -49,7 +49,7 @@ const { parsePrivacy, publicName, shownName, privacyOf, isAnonymous, publicView,
 const { BillingCallError } = require('../billing-client');
 const { ENVELOPE } = require('../events/outbox');
 
-const KINDS = ['tip', 'paid_message', 'tts', 'media_request'];
+const KINDS = ['tip', 'paid_message', 'tts', 'media_request', 'sound'];
 // Origins whose chat effects Tips delivers: its own requests, and EXTERNAL tips Billing announced
 // (their only announcement since the PowerChat webhook moved from Live to Billing).
 const ANNOUNCED_HERE = ['tips', 'billing-external'];
@@ -103,7 +103,7 @@ function createInteractions(ctx) {
 
     /**
      * Validate a request against the creator's profile. Returns the normalised fields:
-     * { kind, amount, message, request: { goal_id, tts, media, highlight_seconds } }.
+     * { kind, amount, message, request: { goal_id, tts, media, sound, highlight_seconds } }.
      */
     async function validate(q, profile, input, { simulation = false } = {}) {
         if (!profile) fail(404, 'tips.creator_not_found', 'this creator has no tip page');
@@ -135,6 +135,14 @@ function createInteractions(ctx) {
             if (!profile.media_requests_enabled) fail(409, 'tips.media_disabled', `${profile.display_name} is not taking media requests`);
             min(profile.media_request_min, 'a media request');
             request.media = { ...mediaUrl(input.media && input.media.url), max_seconds: profile.media_max_seconds };
+        }
+        if (kind === 'sound') {
+            if (!profile.sounds_enabled) fail(409, 'tips.sounds_disabled', `${profile.display_name} has paid sounds switched off`);
+            min(Number(profile.sound_min), 'a sound');
+            const id = input.sound && typeof input.sound === 'object' ? input.sound.id : input.sound_id;
+            const sound = await ctx.sounds.ofCreator(q, profile.creator_subject, id);
+            if (!sound) fail(422, 'tips.sound_not_found', `pick one of ${profile.display_name}'s sounds`);
+            request.sound = { id: sound.id, name: sound.name };
         }
         if (input.goal_id) {
             const g = await ctx.goals.get(q, input.goal_id);
@@ -333,7 +341,7 @@ function createInteractions(ctx) {
         // announced (origin billing), never to a real chat room for a simulation.
         const adapter = test ? 'test' : config.chat.adapter;
         if (ANNOUNCED_HERE.includes(i.origin) && adapter !== 'none') {
-            const chat = { tip: ['chat_line'], paid_message: ['paid_message'], tts: ['chat_line', 'tts'], media_request: ['media_request'] }[i.kind] || [];
+            const chat = { tip: ['chat_line'], paid_message: ['paid_message'], tts: ['chat_line', 'tts'], media_request: ['media_request'], sound: ['chat_line'] }[i.kind] || [];
             for (const effect of chat) effects.push({ effect, adapter, state: 'queued' });
         }
         await t.exec(sql`INSERT INTO interaction_effects ${sql.insert(effects.map((e) => ({ interaction_id: i.id, ...e, created_at: at, updated_at: at })))}
@@ -580,7 +588,8 @@ function createInteractions(ctx) {
         const out = {
             id: i.id, creator: { type: 'user', id: i.creator_subject }, supporter: i.supporter_subject && named ? { type: 'user', id: i.supporter_subject } : null,
             supporter_name: named ? (i.supporter_name || null) : publicName(i), kind: i.kind, amount: i.amount, currency: i.currency, message: i.message || null,
-            tts: req.tts || null, media: req.media ? { url: req.media.url, provider: req.media.provider } : null, goal_id: req.goal_id || null,
+            tts: req.tts || null, media: req.media ? { url: req.media.url, provider: req.media.provider } : null,
+            sound: req.sound ? { id: req.sound.id, name: req.sound.name, url: `/sounds/${req.sound.id}` } : null, goal_id: req.goal_id || null,
             funding: i.funding, settlement: i.settlement, origin: i.origin, test: !!i.test,
             privacy: privacyOf(i), public: publicView(i, { filter }), erased_at: i.erased_at || null,
             moderation: { state: i.moderation, filtered: !!i.filtered, at: i.moderated_at || null },
