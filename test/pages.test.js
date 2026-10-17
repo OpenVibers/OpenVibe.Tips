@@ -29,6 +29,7 @@ const { boot, check, done } = require('./helpers/app');
         assert.match(r.text, /\/shared\/navbar\.js\?v=[0-9a-f]{12}/);
         assert.match(r.text, /<meta name="ov-release"/);
         assert.match(r.text, /id="ov-footer"|class="ovf/);
+        assert.match(r.text, /<script type="application\/ld\+json">[^<]*"@type":"WebSite"[^<]*"name":"OpenVibe.Tips"/, 'the home says what the site is (JSON-LD)');
         assert.match(r.text, /href="\/alex"/);
         assert.ok(!r.text.includes('href="/bob"'), 'switched-off pages are not listed');
         // The home opens with the showcase kit (openvibe-shared/showcase): one h1 (the hero), the kit's sheet, the

@@ -27,6 +27,7 @@ const cache = require('openvibe-shared/cache-policy');
 const frame = require('openvibe-shared/frame');
 const legal = require('openvibe-shared/legal');
 const seo = require('openvibe-shared/seo');
+const HOME_DESCRIPTION = 'Support the creators you watch on OpenVibe: tips, goals, paid messages, text-to-speech and media requests, with stream overlays for creators.';
 const express = require('express');
 const { sql } = require('openvibe-sdk/db');
 const { TipsError } = require('../util');
@@ -81,7 +82,12 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
     // ── Home, robots, sitemap ────────────────────────────────
     r.get('/', withViewer, async (req, res) => {
         const creators = await db.many(sql`SELECT handle, display_name, avatar_url FROM creator_tip_profiles WHERE page_enabled ORDER BY updated_at DESC LIMIT 24`);
-        html(res, pageFor(req, { active: 'home', canonicalPath: '/', styles: [require('openvibe-shared/showcase').STYLESHEET], body: pages.home({ creators }) }));
+        // What the site is, for search engines (WebSite + WebPage, as the other OpenVibe homes say it).
+        const jsonLd = [
+            seo.jsonLd.website({ name: 'OpenVibe.Tips', url: config.baseUrl, description: HOME_DESCRIPTION }),
+            seo.jsonLd.webPage({ name: 'OpenVibe.Tips', url: `${config.baseUrl}/`, description: HOME_DESCRIPTION, siteUrl: config.baseUrl }),
+        ];
+        html(res, pageFor(req, { active: 'home', canonicalPath: '/', styles: [require('openvibe-shared/showcase').STYLESHEET], body: pages.home({ creators }), jsonLd }));
     });
     // What shipped on OpenVibe.Tips: the shared update log every OpenVibe site has.
     r.get('/updates', withViewer, (req, res) => html(res, pageFor(req, { canonicalPath: '/updates', title: 'What shipped on OpenVibe.Tips', body: frame.updatesBody({ service: 'tips', siteName: 'OpenVibe.Tips' }) + `<script src="${ovServe.url('shipped.js')}" defer></script>` })));
