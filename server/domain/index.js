@@ -33,6 +33,7 @@ const { createOverlays } = require('./overlays');
 const { createInteractions } = require('./interactions');
 const { createEffects } = require('./effects');
 const { createModeration } = require('./moderation');
+const { createSounds } = require('./sounds');
 
 const MONEY = { isolation: 'serializable' };
 
@@ -59,6 +60,7 @@ function createDomain({ db, config, outbox, billing, adapters, valkey = null, no
     ctx.outboxKick = () => { try { Promise.resolve(outbox.kick()).catch(() => {}); } catch { /* relay off */ } };
 
     ctx.profiles = createProfiles(ctx);
+    ctx.sounds = createSounds(ctx);
     ctx.goals = createGoals(ctx);
     ctx.overlays = createOverlays(ctx);
     ctx.interactions = createInteractions(ctx);

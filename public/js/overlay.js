@@ -13,7 +13,7 @@
     var current = null;
     var retracted = {};
     var shown = {};
-    var HIDDEN = { tip: 'sent a tip', paid_message: 'sent a paid message', tts: 'sent a message to read out', media_request: 'requested media' };
+    var HIDDEN = { tip: 'sent a tip', paid_message: 'sent a paid message', tts: 'sent a message to read out', media_request: 'requested media', sound: 'played a sound' };
 
     function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
     function fmt(n) { try { return Number(n).toLocaleString('en-US'); } catch (e) { return String(n); } }
@@ -51,11 +51,14 @@
             else title.appendChild(document.createTextNode(p));
         });
         box.appendChild(title);
+        if (a.sound && a.sound.name) box.appendChild(el('div', 'sound', '\u266a ' + a.sound.name));
         var text = a.tts ? a.tts.text : a.message;
         if (s.show_message !== false && text) box.appendChild(el('div', 'msg', text));
         alertEl.appendChild(box);
         alertEl.className = 'show';
-        if (s.sound_url) { try { new Audio(s.sound_url).play().catch(function () {}); } catch (e) { /* no audio */ } }
+        // A paid sound plays instead of the alert sound: it is what the supporter paid for.
+        var audio = a.sound && a.sound.url ? a.sound.url : s.sound_url;
+        if (audio) { try { new Audio(audio).play().catch(function () {}); } catch (e) { /* no audio */ } }
         if (s.speak_message && a.tts && window.speechSynthesis) {
             try { window.speechSynthesis.speak(new SpeechSynthesisUtterance(a.tts.text)); } catch (e) { /* no voice */ }
         }

@@ -15,6 +15,7 @@
  * | POST /paid-messages                    | tips.superchat.create        | the supporter                       |
  * | POST /tts-requests                     | tips.tts.request             | the supporter                       |
  * | POST /media-requests                   | tips.media_request.create    | the supporter                       |
+ * | POST /sound-requests                   | tips.sound.request           | the supporter                       |
  * | GET  /interactions/:id                 | tips.interaction.get         | its creator or supporter            |
  * | GET  /interactions                     | tips.interaction.list        | own receipts; ?as=creator own tips  |
  * | POST /interactions/external            | tips.interaction.record      | —                                   |
@@ -28,6 +29,7 @@
  * | POST /overlay-configs, PATCH …/:id     | tips.overlay.config.update   | owner                               |
  * | POST /simulate                         | tips.simulation.run          | owner                               |
  * | GET  /profiles/:creator/supporters     | tips.profile.get (page off)  | anyone when the page shows it; owner|
+ * | GET  /profiles/:creator/sounds         | tips.profile.get (page off)  | anyone when the page is on; owner   |
  * | GET  /me/export, POST /me/erase        | —                            | the supporter's own tips            |
  * | GET  /moderation?creator=&state=       | tips.interaction.moderate    | the creator and their moderators    |
  * | POST /interactions/:id/hide|restore    | tips.interaction.moderate    | the creator and their moderators    |
@@ -50,6 +52,7 @@ const CAP = {
     superchat: 'tips.superchat.create',
     tts: 'tips.tts.request',
     media: 'tips.media_request.create',
+    sound: 'tips.sound.request',
     interactionGet: 'tips.interaction.get',
     interactionList: 'tips.interaction.list',
     interactionRecord: 'tips.interaction.record',
@@ -107,6 +110,16 @@ function v1Router({ domain, apiAuth, limits }) {
         const owner = mine || svc;
         const active = await goals.list(db, p.creator_subject, { status: 'active' });
         res.json({ profile: profiles.present(p, { owner }), goals: owner ? await goals.presentMany(db, active) : await goals.publicGoals(db, active, p) });
+    }));
+
+    /** The creator's paid sounds (what a supporter may pick for POST /sound-requests), when they are switched on. */
+    r.get('/profiles/:creator/sounds', wrap(async (req, res) => {
+        const p = await creatorOf(req, req.params.creator);
+        const who = req.principal;
+        const owner = (who.kind === 'user' && who.subject === p.creator_subject) || (who.kind === 'service' && apiAuth.granted(who, CAP.profileGet));
+        if (!p.page_enabled && !owner) fail(404, 'tips.creator_not_found', 'no tip profile for this creator');
+        const list = p.sounds_enabled || owner ? await domain.sounds.list(db, p.creator_subject) : [];
+        res.json({ creator: { type: 'user', id: p.creator_subject }, enabled: !!p.sounds_enabled, minimum: Number(p.sound_min), sounds: list.map((x) => ({ ...x, url: `${domain.config.baseUrl}${x.url}` })) });
     }));
 
     /** The supporters page: top supporters and recent public messages, as the creator chose to show them. */
@@ -209,6 +222,7 @@ function v1Router({ domain, apiAuth, limits }) {
     r.post('/paid-messages', pays, ...paid('paid_message', CAP.superchat));
     r.post('/tts-requests', pays, ...paid('tts', CAP.tts));
     r.post('/media-requests', pays, ...paid('media_request', CAP.media));
+    r.post('/sound-requests', pays, ...paid('sound', CAP.sound));
 
     // ── Interactions ─────────────────────────────────────────
     // The hottest list: a keyset page of any size costs three queries (the page, the creators' filters,

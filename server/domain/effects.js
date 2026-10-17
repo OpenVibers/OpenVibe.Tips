@@ -56,6 +56,7 @@ function createEffects(ctx) {
         if (effect.effect === 'paid_message') job.highlight_seconds = req.highlight_seconds || 0;
         if (effect.effect === 'tts') job.tts = pv.tts;
         if (effect.effect === 'media_request') { job.media = req.media; job.text = amount ? `${name} requested media for ${amount}` : `${name} requested media`; }
+        if (effect.effect === 'chat_line' && i.kind === 'sound' && req.sound) job.text = `${name} played \u201c${req.sound.name}\u201d${amount ? ` for ${amount}` : ''}${msg}`;
         return job;
     }
 

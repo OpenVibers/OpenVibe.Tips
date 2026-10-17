@@ -32,6 +32,8 @@ const TABLES = [
     { table: 'tip_interactions', subject: 'creator_subject', file: 'tips-received.json', columns: ['id', 'kind', 'amount', 'currency', 'payment_state', 'settlement', 'origin', 'created_at', 'settled_at', 'reversed_at'], erase: { keep: money } },
     { table: 'paid_messages', subject: 'creator_subject', file: null, erase: { keep: money } },
     { table: 'paid_media_requests', subject: 'creator_subject', file: null, erase: { keep: money } },
+    // The creator's paid sounds: listed in the export (each file is at its /sounds/<id> link), deleted on erasure.
+    { table: 'creator_sounds', subject: 'creator_subject', file: 'sounds.json', columns: ['id', 'name', 'mime', 'bytes', 'created_at'] },
     { table: 'tip_moderation_log', subject: 'creator_subject', file: null, erase: { keep: 'the creator\'s moderation log, kept for accountability' } },
     { table: 'tip_moderation_log', subject: 'actor', file: null, erase: { keep: 'the moderation log names the moderator, for the creator\'s accountability' }, kind: 'tip_moderation_log' },
 ];

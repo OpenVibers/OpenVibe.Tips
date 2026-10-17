@@ -80,7 +80,7 @@ function publicView(i, { at, filter: settings = null } = {}) {
         test: !!i.test,
         at: at || i.settled_at || i.created_at,
     };
-    if (isHidden(i)) return { ...base, amount: null, supporter_name: null, message: null, tts: null, media: null, hidden: true };
+    if (isHidden(i)) return { ...base, amount: null, supporter_name: null, message: null, tts: null, media: null, sound: null, hidden: true };
     const message = privateMsg || !i.message ? null : filter.apply(i.message, settings).text;
     const tts = i.kind === 'tts' && req.tts && !i.erased_at ? { text: filter.apply(req.tts.text, settings, 'speech').text, voice: req.tts.voice } : null;
     return {
@@ -89,6 +89,8 @@ function publicView(i, { at, filter: settings = null } = {}) {
         message,
         tts,
         media: i.kind === 'media_request' && req.media && !i.erased_at ? { url: req.media.url } : null,
+        // A paid sound: the overlay plays it (the creator's own file; nothing the supporter wrote).
+        sound: i.kind === 'sound' && req.sound ? { id: req.sound.id, name: req.sound.name, url: `/sounds/${req.sound.id}` } : null,
         hidden: false,
     };
 }
