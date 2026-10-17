@@ -193,7 +193,7 @@ function createSessionRoutes(config, userAuth, { fetchImpl = globalThis.fetch } 
     router.get('/me', async (req, res) => {
         const token = (String(req.headers.authorization || '').startsWith('Bearer ') ? req.headers.authorization.slice(7) : null) || (req.cookies && req.cookies[ACCESS_COOKIE]);
         const claims = await userAuth.verify(token);
-        if (!claims) return res.status(401).json({ error: 'Not authenticated' });
+        if (!claims) return res.json({ user: null });   // signed out: 200 with no user (as Blog, Community, Wiki), not a 401 in every signed-out visitor's console
         res.json({ user: claimsToUser(claims), expires_at: claims.exp ? claims.exp * 1000 : null });
     });
 
