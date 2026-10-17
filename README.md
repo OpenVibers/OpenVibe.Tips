@@ -113,6 +113,12 @@ delivery record; a reversal before delivery cancels the queued effects (`tips.in
 | `external` | nothing — a tip on the creator's own PowerChat (ADR-012 EXTERNAL) | `POST /api/v1/interactions/external`, or Billing's `billing.receipt.external` (origin `billing-external`: Tips posts the chat line — `… tipped N Vibes: msg (PowerChat)` — plus overlay alert and goal, as Live's webhook did); once per (provider, provider_ref); never in Billing totals |
 | `none` (simulation) | nothing | at once, `test = 1`: full effect path, no goal contribution, no durable event, excluded from totals |
 
+PowerChat: Billing answers a PowerChat intent with a `checkout_ref` (`pcorder:<intent>`) and no URL, and Tips builds
+the link from `TIPS_POWERCHAT_LINK_TEMPLATE` (`{ref}`, `{cents}`, `{bits}`). Production sets it since 2026-10-17 to
+PowerChat's canonical tip link on the site's PowerChat account, the same link OpenVibe.Live builds for Vibes purchases
+(`https://<powerchat>/<site account>/tip?app_client_id=…&app_ref={ref}&app_purpose=vibes&app_amount_cents={cents}`):
+the payment's webhook reaches Billing through openvibe.live, Billing credits the supporter, and Tips gives the tip.
+
 **Exactly one logical interaction:** the inbox claims `(consumer, event_id)` in the same serializable
 transaction as the change, so a redelivered event does nothing; `billing_txn_id` is UNIQUE, so the same
 Billing transaction under another event id (republish, replay) is still one interaction; API calls carry
@@ -406,9 +412,6 @@ With `VALKEY_URL` every process counts one caller together (`test/integration.te
 
 ## What waits
 
-- **PowerChat checkout from openvibe.tips**: Billing answers a PowerChat checkout with a `checkout_ref` and no
-  URL, and `TIPS_POWERCHAT_LINK_TEMPLATE` is not set in production, so supporters on openvibe.tips pay with Vibes
-  credit. (Tips on a streamer's own PowerChat page do arrive: `billing.receipt.external`, see below.)
 - **EXTERNAL PowerChat tips** arrive as `billing.receipt.external` since the Billing cutover (2026-10-17), through
   the `billing.receipt.*` subscription; the chat adapter posts the chat line and plays the alert, and Live advances
   its own channel goal and tip history from `tips.interaction.ready` (OpenVibe.Live `server/tips/tips-events.js`).
