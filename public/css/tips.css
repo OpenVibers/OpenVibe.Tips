@@ -63,6 +63,9 @@ dl.receipt dd { margin: 0; overflow-wrap: anywhere; }
 .js .tip-form[data-kind=tts] .when-tts, .js .tip-form[data-kind=media_request] .when-media, .js .tip-form[data-kind=sound] .when-sound { display: block; }
 .sounds .sound-pick { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .sounds audio { height: 32px; max-width: 100%; }
+.support-list { list-style: none; padding: 0; margin: 8px 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.support-form { display: grid; gap: 4px 16px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); align-items: end; }
+.support-form button { justify-self: start; }
 .js .tip-form:not([data-kind=tip]) .when-tip { display: none; }
 ol.leaderboard { padding-left: 1.6em; }
 ol.leaderboard li, ul.supporters li { margin: 4px 0; }

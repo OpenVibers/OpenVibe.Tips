@@ -36,6 +36,7 @@ const pages = require('./pages');
 const { asset } = require('./layout');
 const { PAGE_DEFAULTS } = require('../domain/profiles');
 const multipart = require('./multipart');
+const supportLinks = require('../domain/support-links');
 
 // The sitemap's lastmod: when this server booted — a real date, computed once, never per request.
 const BOOT_AT = new Date().toISOString();
@@ -259,6 +260,11 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
         return { done: 'Page settings saved' };
     });
     action('/dashboard/goals', async (req, p) => { await goals.create(p.creator_subject, req.body); return { done: 'Goal added' }; });
+    action('/dashboard/support-links', async (req, p) => {
+        const links = Object.keys(supportLinks.PROVIDERS).map((provider) => ({ provider, handle: req.body[`link_${provider}`] }));
+        await profiles.update(p.creator_subject, { support_links: links });
+        return { done: 'Links saved' };
+    });
     const ownGoal = async (req, p) => {
         const g = await goals.get(db, req.params.id);
         if (!g || g.creator_subject !== p.creator_subject) throw new TipsError(404, 'tips.goal_not_found', 'no such goal');
