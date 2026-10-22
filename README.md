@@ -48,7 +48,9 @@ from *interaction delivered*.
   (openvibe-sdk transactional outbox)
 - **OpenVibe.Network** — SSO for people, service tokens, JWKS, identity resolve (a creator's Chat room)
 - **OpenVibe.Chat** — chat delivery through its typed ingress (`/internal/chat/messages`, `/internal/chat/events`)
-- **OpenVibe.Live** — overlay consumer
+- **OpenVibe.Live** — overlay consumer; its public stream list (`GET <LIVE_URL>/api/streams`) feeds the home's "Live on
+  OpenVibe now" ([server/clients/live-now.js](server/clients/live-now.js): once a minute, 2 s timeout, never Live's AI
+  text, nothing when Live does not answer; `TIPS_LIVE_NOW=on|off`, off in tests by default)
 - **OpenVibe.Shared** v2.2.0 (app icon, SSR footer, noscript nav, release manifest, legal pages, boost page moves) and
   the Network's `navbar.js`; **openvibe-contracts** v0.79.0 and **openvibe-sdk** v0.28.0 (service tokens,
   the async data layer `openvibe-sdk/db`, the PostgreSQL outbox and inbox — the events outbox is the SDK's
@@ -341,7 +343,9 @@ capabilities above (`TIPS_CHAT_URL` only when Chat is not on `127.0.0.1:4400`).
 
 ## Pages (server-rendered, useful without JavaScript)
 
-`/` · `/<handle>` (goals + tip form posting to checkout; `index,follow` only when the creator switched the
+`/` (who is live on OpenVibe, the creators who switched their page on with their first active goal, what a supporter can
+send, what a creator gets, the services a creator can link, how it works, what it costs, six questions with their
+FAQPage JSON-LD; a section with nothing to show is left out) · `/<handle>` (goals + tip form posting to checkout; `index,follow` only when the creator switched the
 page on, otherwise 404 for everyone else and a `noindex` preview for the creator) · `/<handle>/goals` ·
 `/<handle>/supporters` (when the creator shows it) · `/receipts`, `/receipts/:id` (payment and delivery
 shown separately, with the privacy chosen), `/receipts/export`, `/receipts/erase` · `/moderate/<handle>`

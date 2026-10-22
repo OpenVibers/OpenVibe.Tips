@@ -45,18 +45,47 @@ function errorBox(msg) { return msg ? `<p class="notice error" role="alert">${es
 const NEW_PAGE_MINIMUMS = Object.freeze({ tip: 1, paid_message: 100, tts: 100, media_request: 25, sound: 50 });
 const vibes = (n) => `${n} ${n === 1 ? 'Vibe' : 'Vibes'}`;
 
-/** The home: the product's own words (openvibe-shared/showcase), then the creators who switched their page on. */
-function home({ creators }) {
+/** Questions people ask, answered from how Tips works (also the home's FAQPage JSON-LD). */
+const HOME_FAQ = Object.freeze([
+    { q: 'What are Vibes?', a: 'Vibes are OpenVibe\'s credits for supporting creators. Your balance is kept by OpenVibe.Billing, and the same Vibes work for tips here and on OpenVibe.Live.' },
+    { q: 'How do I pay?', a: 'From your Vibes balance, or through a checkout on the creator\'s page. OpenVibe.Billing handles every payment, and your receipt at openvibe.tips/receipts shows when it settled and when your message was delivered.' },
+    { q: 'Can I stay anonymous?', a: 'Yes. For each tip you can show your name as "Anonymous" to everyone but yourself, hide the amount from the public, or keep a tip\'s message for the creator only.' },
+    { q: 'Can creators on Twitch, YouTube or Kick use it?', a: 'Yes. The alerts and goal bar are web pages a creator adds to OBS or Streamlabs as a browser source, so they show on any stream. Paid messages also appear in the creator\'s OpenVibe chat.' },
+    { q: 'What can a creator control?', a: 'Their own minimums, whether text-to-speech, media requests and sounds are on, how long a media request may run, a word filter that stars out or holds messages, and moderators who can hide anything that slips through.' },
+    { q: 'Do I need an account?', a: 'Anyone can read a creator\'s page. Sending something needs an OpenVibe account, so your receipts and your privacy choices stay with you.' },
+]);
+
+const SUPPORT_SERVICES = Object.freeze(['Ko-fi', 'PayPal.me', 'Patreon', 'Buy Me a Coffee', 'Cash App', 'Venmo', 'GitHub Sponsors', 'Liberapay', 'Open Collective', 'Streamlabs', 'StreamElements']);
+
+const watching = (v) => (v === 1 ? '1 watching' : `${n(v)} watching`);
+
+/** A titled home section with an optional "see all" link; nothing when it has no body. */
+function homeSection({ id, title, lede, more, body }) {
+    if (!body) return '';
+    return `<section class="tp-sec" aria-labelledby="${esc(id)}"><div class="tp-head"><h2 id="${esc(id)}">${esc(title)}</h2>${more ? `<a class="tp-more" href="${esc(more.href)}">${esc(more.label)}<span aria-hidden="true"> →</span></a>` : ''}</div>${lede ? `<p class="tp-lede">${esc(lede)}</p>` : ''}${body}</section>`;
+}
+
+/**
+ * The home: what Tips is for, who is live on OpenVibe right now, the creators who switched their page on, what a
+ * supporter can send, what a creator gets (overlays for any streaming app, other ways to be paid), what it costs, how it
+ * works and the questions people ask. live: clients/live-now.js; creators: switched-on pages with their active goal.
+ */
+function home({ creators, live = [] }) {
     const m = NEW_PAGE_MINIMUMS;
+    const liveCards = live.length ? `<ul class="tp-cards">${live.map((c) => `<li class="tp-card"><p class="tp-card-top"><span class="tp-live">Live</span> <a href="${esc(c.url)}"><strong>${esc(c.name)}</strong></a></p>${c.title ? `<p>${esc(c.title)}</p>` : ''}<p class="meta">${[c.category, watching(c.viewers)].filter(Boolean).map(esc).join(' · ')}</p></li>`).join('')}</ul>` : '';
+    const creatorCards = creators.length ? `<ul class="tp-cards">${creators.map((c) => `<li class="tp-card"><p class="tp-card-top">${c.avatar_url ? `<img src="${esc(c.avatar_url)}" alt="" width="40" height="40" loading="lazy">` : ''}<a href="/${esc(c.handle)}"><strong>${esc(c.display_name)}</strong></a></p>${c.headline ? `<p>${esc(c.headline)}</p>` : ''}${c.goal ? `<p class="meta">Goal: ${esc(c.goal.title)}</p><div class="bar" role="progressbar" aria-label="${esc(c.goal.title)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${c.goal.percent}"><span style="width:${c.goal.percent}%"></span></div>` : ''}</li>`).join('')}</ul>` : '';
     return showcase.hero({
         eyebrow: 'OpenVibe.Tips',
         title: 'Support the creators', accent: 'you watch',
-        lede: 'Tip a creator with Vibes, send a highlighted paid message, have your message read out, or request a video for their stream. Creators set goals and show every tip on stream with an overlay.',
-        actions: creators.length
-            ? [{ label: 'Find a creator', href: '#creators', primary: true }, { label: 'Start your tip page', href: '/dashboard' }]
-            : [{ label: 'Start your tip page', href: '/dashboard', primary: true }],
-        note: 'Already sent something? Your receipts are at openvibe.tips/receipts.',
-    }) + showcase.features({
+        lede: 'Tip a creator with Vibes, send a highlighted paid message, have your message read out, request a video or play one of their sounds on stream. Creators set goals and show every tip with overlays that work on any streaming app.',
+        actions: [
+            ...(creators.length ? [{ label: 'Find a creator', href: '#creators', primary: true }] : live.length ? [{ label: 'See who is live', href: '#live', primary: true }] : []),
+            { label: 'Start your tip page', href: '/dashboard', primary: !creators.length && !live.length },
+            { label: 'Your receipts', href: '/receipts' },
+        ],
+    }) + homeSection({ id: 'live', title: 'Live on OpenVibe now', lede: 'Open a channel to watch, chat and support the creator.', more: { href: 'https://openvibe.live/', label: 'Everyone live' }, body: liveCards })
+    + homeSection({ id: 'creators', title: 'Creators on OpenVibe.Tips', lede: 'Every creator who switched their tip page on, the most recently updated first.', body: creatorCards })
+    + showcase.features({
         title: 'What you can send',
         items: [
             { icon: 'ov:tips', title: 'A tip', text: 'Vibes straight to the creator, with an optional message.' },
@@ -64,11 +93,24 @@ function home({ creators }) {
             { icon: 'ov:audio', title: 'Text-to-speech', text: 'Your message read out on stream, where the creator turned it on.' },
             { icon: 'ov:video', title: 'A media request', text: 'A video for their stream, up to the length they allow, where they turned it on.' },
             { icon: 'ov:audio', title: 'A sound', text: "One of the creator's sounds, played on stream by their overlay, where they turned it on." },
+            { icon: 'ov:shield', title: 'Your privacy, your choice', text: 'Send as Anonymous, hide the amount, or keep a message for the creator only.' },
         ],
-    }) + showcase.steps({
+    }) + showcase.features({
+        title: 'For creators',
+        lede: 'A tip page at openvibe.tips/your-name, set up from your dashboard in a few minutes.',
+        items: [
+            { icon: 'ov:live', title: 'Overlays for any stream', text: 'Alerts and a goal bar as browser sources for OBS or Streamlabs, on Twitch, YouTube, Kick or OpenVibe.Live.', href: '/dashboard' },
+            { icon: 'ov:check', title: 'Goals', text: 'Set goals with a target; every tip moves the bar on your page and on stream.', href: '/dashboard' },
+            { icon: 'ov:audio', title: 'Sounds and requests', text: 'Upload up to 12 sounds, turn on text-to-speech and media requests, and set your own minimums.', href: '/dashboard' },
+            { icon: 'ov:shield', title: 'Moderation', text: 'A word filter that stars out or holds messages, and moderators who can hide anything that slips through.', href: '/dashboard' },
+            { icon: 'ov:tips', title: 'Other ways to be paid', text: `Link your ${SUPPORT_SERVICES.slice(0, 4).join(', ')} and ${SUPPORT_SERVICES.length - 4} more services beside your tip form.`, href: '/dashboard' },
+            { icon: 'ov:docs', title: 'Receipts both ways', text: 'Supporters keep a receipt for every tip; you see each one settle and reach your stream.' },
+        ],
+    }) + homeSection({ id: 'services', title: 'Other ways to support', lede: 'A creator can list these beside their tip form. Each link is built from the creator\'s handle on that service\'s own site, and it is paid there, outside OpenVibe.', body: `<ul class="tp-chips">${SUPPORT_SERVICES.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` })
+    + showcase.steps({
         title: 'How it works',
         items: [
-            { title: 'Pick a creator', text: 'Every creator who switched their page on has one at openvibe.tips/name.' },
+            { title: 'Pick a creator', text: 'Every creator who switched their page on has one at openvibe.tips/name, linked from their channel.' },
             { title: 'Choose what to send', text: "A tip, a paid message, text-to-speech, a media request or a sound, within the creator's own limits." },
             { title: 'Pay with Vibes', text: 'From your Vibes balance, or through checkout. Payments are handled by OpenVibe.Billing; your receipt shows when the payment settled and when your message was delivered.' },
         ],
@@ -83,8 +125,8 @@ function home({ creators }) {
             { name: 'Sound', price: vibes(m.sound), items: ['Played on stream by their overlay', 'Only where the creator turned it on'] },
         ],
         note: "The creator's page shows their own minimums before you pay.",
-    }) + `
-${creators.length ? `<section class="sc-sec" id="creators" aria-labelledby="creators-h"><h2 id="creators-h">Creators on OpenVibe.Tips</h2><ul class="creators">${creators.map((c) => `<li><a href="/${esc(c.handle)}">${c.avatar_url ? `<img src="${esc(c.avatar_url)}" alt="" width="40" height="40" loading="lazy">` : ''}<span>${esc(c.display_name)}</span></a></li>`).join('')}</ul></section>` : ''}`;
+    }) + `<section class="tp-sec" aria-labelledby="faq"><div class="tp-head"><h2 id="faq">Questions and answers</h2></div><div class="tp-faq">${HOME_FAQ.map((x) => `<details><summary>${esc(x.q)}</summary><p>${esc(x.a)}</p></details>`).join('')}</div></section>`
+    + showcase.cta({ title: 'Stream? Get tipped anywhere.', text: 'Start a tip page, add the overlay to your streaming app and share your link.', actions: [{ label: 'Start your tip page', href: '/dashboard', primary: true }, { label: 'Memberships on OpenVibe.VIP', href: 'https://openvibe.vip/' }] });
 }
 
 /** The tip form: every field works as a plain POST. */
@@ -435,4 +477,4 @@ function errorPage({ status, title, message }) {
     return `<section class="card"><h1>${esc(title)}</h1><p>${esc(message)}</p><p><a href="/">OpenVibe.Tips home</a></p></section><!-- ${status} -->`;
 }
 
-module.exports = { NEW_PAGE_MINIMUMS, home, creatorPage, goalsPage, supportersPage, receiptsPage, erasePage, receiptPage, dashboard, moderatePage, invitePage, inviteCreated, tokenCreated, errorPage, tipForm };
+module.exports = { NEW_PAGE_MINIMUMS, HOME_FAQ, SUPPORT_SERVICES, home, creatorPage, goalsPage, supportersPage, receiptsPage, erasePage, receiptPage, dashboard, moderatePage, invitePage, inviteCreated, tokenCreated, errorPage, tipForm };

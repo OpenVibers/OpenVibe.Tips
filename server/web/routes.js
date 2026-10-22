@@ -27,7 +27,7 @@ const cache = require('openvibe-shared/cache-policy');
 const frame = require('openvibe-shared/frame');
 const legal = require('openvibe-shared/legal');
 const seo = require('openvibe-shared/seo');
-const HOME_DESCRIPTION = 'Support the creators you watch on OpenVibe: tips, goals, paid messages, text-to-speech and media requests, with stream overlays for creators.';
+const HOME_DESCRIPTION = 'Tip the creators you watch: paid messages, text-to-speech, media requests and sounds, with goals and alert overlays for OBS on any streaming app.';
 const express = require('express');
 const { sql } = require('openvibe-sdk/db');
 const { TipsError } = require('../util');
@@ -51,7 +51,7 @@ const FLASH = new Set(['Saved', 'Page settings saved', 'Goal added', 'Goal updat
 const MOD_FLASH = new Set(['Hidden', 'Shown', 'You are now a moderator']);
 const RECEIPT_FLASH = new Set(['Your data was erased from your tips']);
 
-function createWebRoutes({ domain, config, layout, userAuth }) {
+function createWebRoutes({ domain, config, layout, userAuth, liveNow = { list: async () => [] } }) {
     // Every handler below may be async: its errors reach the app's error handler (the 500 page).
     const r = asyncRouter(express.Router());
     const { profiles, goals, interactions, overlays, moderation, sounds, db } = domain;
@@ -81,13 +81,23 @@ function createWebRoutes({ domain, config, layout, userAuth }) {
 
     // ── Home, robots, sitemap ────────────────────────────────
     r.get('/', withViewer, async (req, res) => {
-        const creators = await db.many(sql`SELECT handle, display_name, avatar_url FROM creator_tip_profiles WHERE page_enabled ORDER BY updated_at DESC LIMIT 24`);
-        // What the site is, for search engines (WebSite + WebPage, as the other OpenVibe homes say it).
+        const [rows, live] = await Promise.all([
+            db.many(sql`SELECT creator_subject, handle, display_name, avatar_url, headline FROM creator_tip_profiles WHERE page_enabled ORDER BY updated_at DESC LIMIT 24`),
+            liveNow.list(),
+        ]);
+        // Each creator's first active goal: its title and percent only (a public goal bar shows both, amounts or not).
+        const creators = await Promise.all(rows.map(async (p) => {
+            const [goal] = await goals.presentMany(db, (await goals.list(db, p.creator_subject, { status: 'active' })).slice(0, 1));
+            return { handle: p.handle, display_name: p.display_name, avatar_url: p.avatar_url, headline: p.headline, goal: goal ? { title: goal.title, percent: goal.percent } : null };
+        }));
+        // What the site is, for search engines (WebSite + WebPage, as the other OpenVibe homes say it), and the questions.
         const jsonLd = [
             seo.jsonLd.website({ name: 'OpenVibe.Tips', url: config.baseUrl, description: HOME_DESCRIPTION }),
             seo.jsonLd.webPage({ name: 'OpenVibe.Tips', url: `${config.baseUrl}/`, description: HOME_DESCRIPTION, siteUrl: config.baseUrl }),
+            { '@context': 'https://schema.org', '@type': 'FAQPage', mainEntity: pages.HOME_FAQ.map((x) => ({ '@type': 'Question', name: x.q, acceptedAnswer: { '@type': 'Answer', text: x.a } })) },
         ];
-        html(res, pageFor(req, { active: 'home', canonicalPath: '/', styles: [require('openvibe-shared/showcase').STYLESHEET], body: pages.home({ creators }), jsonLd }));
+        // Who is live comes from Live once a minute, so the page may be cached as long.
+        html(res, pageFor(req, { active: 'home', canonicalPath: '/', title: 'Tips, paid messages and stream alerts', description: HOME_DESCRIPTION, styles: [require('openvibe-shared/showcase').STYLESHEET], wide: true, body: pages.home({ creators, live }), jsonLd }));
     });
     // What shipped on OpenVibe.Tips: the shared update log every OpenVibe site has.
     r.get('/updates', withViewer, (req, res) => html(res, pageFor(req, { canonicalPath: '/updates', title: 'What shipped on OpenVibe.Tips', body: frame.updatesBody({ service: 'tips', siteName: 'OpenVibe.Tips' }) + `<script src="${ovServe.url('shipped.js')}" defer></script>` })));

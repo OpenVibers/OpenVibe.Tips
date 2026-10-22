@@ -91,3 +91,26 @@ ul.mod-list, ul.plain { list-style: none; padding: 0; }
 .page .sc-tiers { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
 @media (min-width: 640px) { .page .sc-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .page .sc-price { font-size: 24px; }
+/* The front page (pages.home): 1080 px, live channels and creators as cards, service chips, questions. */
+.page.page-wide { max-width: 1080px; }
+.page.page-wide .sc-cta { padding-left: 0; padding-right: 0; }
+@media (min-width: 900px) { .page.page-wide .sc-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.tp-sec { margin-top: 44px; }
+.tp-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 16px; }
+.tp-head h2 { margin: 0; font-size: clamp(1.3rem, 2.4vw, 1.75rem); letter-spacing: -.01em; }
+.tp-more { font-weight: 600; font-size: .95rem; text-decoration: none; }
+.tp-more:hover { text-decoration: underline; text-underline-offset: 3px; }
+.tp-lede { margin: 4px 0 14px; color: var(--tips-muted); }
+.tp-cards { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(min(240px, 100%), 1fr)); }
+.tp-card { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 14px 16px; border-radius: 14px; border: 1px solid var(--tips-border); background: var(--tips-card); overflow-wrap: anywhere; }
+.tp-card p { margin: 0; }
+.tp-card-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tp-card-top img { border-radius: 50%; object-fit: cover; }
+.tp-live { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: .72rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; background: var(--danger, #dc2626); color: var(--on-accent, #fff); }
+.tp-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.tp-chips li { padding: 6px 12px; border-radius: 999px; border: 1px solid var(--tips-border); background: var(--tips-card); font-size: .92rem; }
+.tp-faq { display: grid; gap: 8px; }
+.tp-faq details { border: 1px solid var(--tips-border); border-radius: 12px; background: var(--tips-card); padding: 0 16px; }
+.tp-faq summary { cursor: pointer; font-weight: 600; padding: 12px 0; }
+.tp-faq p { margin: 0 0 14px; color: var(--tips-muted); }
+@media (max-width: 600px) { .tp-cards > li:nth-child(n+5) { display: none; } }

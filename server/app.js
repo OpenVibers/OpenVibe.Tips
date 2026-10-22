@@ -138,7 +138,8 @@ function createApp(opts = {}) {
             res.setHeader('Cache-Control', cache.assetHeaders(rel, { hashed: v && v === assetVersion(rel) }));
         },
     }));
-    app.use(createWebRoutes({ domain, config, layout, userAuth }));
+    const liveNow = opts.liveNow || require('./clients/live-now').createLiveNow({ config, fetchImpl: opts.fetchImpl, log });
+    app.use(createWebRoutes({ domain, config, layout, userAuth, liveNow }));
 
     app.use((req, res) => {
         if (req.path.startsWith('/api/') || req.path.startsWith('/internal/')) return http.sendProblem(res, 404, 'not_found', { ctx: req.ov });
