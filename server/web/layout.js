@@ -47,7 +47,7 @@ function createLayout({ config, release }) {
 
     /**
      * o: title, description, canonicalPath, robots ('index,follow' | 'noindex,nofollow'), body,
-     *    active ('home'|'dashboard'|'receipts'|'creator'), ogImage, jsonLd (array), viewer
+     *    active ('home'|'dashboard'|'receipts'|'creator'), ogImage, jsonLd (array), viewer, wide (the home: 1080 px)
      */
     function page(o) {
         const description = (o.description || DEFAULT_DESCRIPTION).replace(/\s+/g, ' ').trim().slice(0, 300);
@@ -89,7 +89,7 @@ function createLayout({ config, release }) {
             ].filter(Boolean).join('\n'),
             body: `<div id="navbar-mount"></div>
 <header class="site-head"><a class="brand" href="/">${SITE_NAME}</a><nav>${NAV_LINKS.map((l) => `<a href="${l.href}"${o.active === l.label.toLowerCase() ? ' aria-current="page"' : ''}>${l.label}</a>`).join('')}</nav>${who}</header>
-<main id="main" class="page">
+<main id="main" class="page${o.wide ? ' page-wide' : ''}">
 ${o.body || ''}
 ${o.canonicalPath === '/' && o.active === 'home' ? frame.shipped({ service: 'tips', title: `Recently shipped on ${SITE_NAME}` }) : ''}
 </main>

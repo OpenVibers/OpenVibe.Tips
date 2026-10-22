@@ -135,6 +135,8 @@ function loadConfig(env = process.env) {
             intervalMs: int(env.TIPS_JOBS_INTERVAL_MS, 2000),
         },
         liveUrl: trim(env.LIVE_URL || 'https://openvibe.live'),
+        // The front page's "Live now" (clients/live-now.js): Live's public stream list. Off in tests unless asked for.
+        liveNow: env.TIPS_LIVE_NOW ? env.TIPS_LIVE_NOW === 'on' : nodeEnv !== 'test',
         // Media requests Tips accepts (the media queue owner re-checks them).
         mediaHosts: list(env.TIPS_MEDIA_HOSTS || 'youtube.com,www.youtube.com,m.youtube.com,music.youtube.com,youtu.be'),
     };
