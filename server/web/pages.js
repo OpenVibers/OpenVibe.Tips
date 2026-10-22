@@ -451,6 +451,22 @@ ${rows.length ? `<ul class="mod-list">${rows.map(item).join('')}</ul>` : '<p>Not
 ${next ? `<p><a href="/moderate/${esc(profile.handle)}?state=${esc(state)}&cursor=${esc(next)}">Older</a></p>` : ''}`;
 }
 
+/** /start: what the creator's page will be, and the one button that switches it on. */
+function startPage({ profile: p, csrf, idem }) {
+    return `<h1>Your tip page</h1>
+<section class="card">
+  <p>Your page will be <b>openvibe.tips/${esc(p.handle)}</b>, as ${esc(p.display_name)}, from your OpenVibe account.</p>
+  <ul>
+    <li>Viewers tip you in Vibes, with a message if they like. OpenVibe.Billing settles every tip and keeps your Vibes.</li>
+    <li>Tips count toward your goals, and appear in your OpenVibe.Live chat and on your channel's goal.</li>
+    <li>Text-to-speech, media requests and paid sounds stay off until you switch them on in the dashboard.</li>
+    <li>The page is public and search engines may index it. You can switch it off at any time.</li>
+  </ul>
+  <form method="post" action="/start">${hidden({ csrf, idem })}<button class="btn" type="submit">Turn on my tip page</button></form>
+  <p class="fine"><a href="/dashboard">Set it up in the dashboard first</a></p>
+</section>`;
+}
+
 function invitePage({ profile, csrf, idem, secret, isSelf }) {
     return `<h1>Moderate ${esc(profile.display_name)}</h1>
 <section class="card">
@@ -477,4 +493,4 @@ function errorPage({ status, title, message }) {
     return `<section class="card"><h1>${esc(title)}</h1><p>${esc(message)}</p><p><a href="/">OpenVibe.Tips home</a></p></section><!-- ${status} -->`;
 }
 
-module.exports = { NEW_PAGE_MINIMUMS, HOME_FAQ, SUPPORT_SERVICES, home, creatorPage, goalsPage, supportersPage, receiptsPage, erasePage, receiptPage, dashboard, moderatePage, invitePage, inviteCreated, tokenCreated, errorPage, tipForm };
+module.exports = { NEW_PAGE_MINIMUMS, HOME_FAQ, SUPPORT_SERVICES, home, creatorPage, goalsPage, supportersPage, receiptsPage, erasePage, receiptPage, dashboard, moderatePage, startPage, invitePage, inviteCreated, tokenCreated, errorPage, tipForm };

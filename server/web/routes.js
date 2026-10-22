@@ -47,7 +47,7 @@ const SITE_NAME = 'OpenVibe.Tips';
 const SITE_SUMMARY = 'OpenVibe.Tips: creator support — tips, goals, paid messages, TTS and media requests, and overlays.';
 
 const FLASH = new Set(['Saved', 'Page settings saved', 'Goal added', 'Goal updated', 'Goal closed', 'Overlay link revoked', 'Alert settings saved', 'Test sent — check your overlay',
-    'Filter saved', 'Moderator removed', 'Invitation revoked']);
+    'Filter saved', 'Moderator removed', 'Invitation revoked', 'Your tip page is on']);
 const MOD_FLASH = new Set(['Hidden', 'Shown', 'You are now a moderator']);
 const RECEIPT_FLASH = new Set(['Your data was erased from your tips']);
 
@@ -242,6 +242,23 @@ function createWebRoutes({ domain, config, layout, userAuth, liveNow = { list: a
             }),
         }), status);
     }
+    // ── Start: a creator's tip page in one step (OpenVibe.Live's dashboard links here) ──
+    // Signed in, the profile is made from the Network account (the username is the handle, as on the dashboard); one
+    // button switches the public page on, accepting tips. A page that is on already goes straight to the dashboard.
+    r.get('/start', withViewer, async (req, res) => {
+        if (!req.viewer) return res.redirect(`/auth/login?next=${encodeURIComponent('/start')}`);
+        const p = await ensureProfile(req);
+        if (p.page_enabled) return res.redirect(303, '/dashboard');
+        return html(res, pageFor(req, { title: 'Your tip page', active: 'dashboard', robots: 'noindex,nofollow', canonicalPath: '/start', body: pages.startPage({ profile: p, csrf: csrfFor(req.viewer.subject), idem: idem() }) }));
+    });
+    r.post('/start', withViewer, form, async (req, res) => {
+        if (!req.viewer) return res.redirect(303, `/auth/login?next=${encodeURIComponent('/start')}`);
+        if (!csrfOk(req)) return html(res, pageFor(req, { title: 'Your tip page', robots: 'noindex,nofollow', body: pages.errorPage({ status: 403, title: 'That form expired', message: 'Open the start page again.' }) }), 403);
+        const p = await ensureProfile(req);
+        if (!p.page_enabled || !p.accepting) await profiles.update(p.creator_subject, { page_enabled: true, accepting: true });
+        return res.redirect(303, `/dashboard?done=${encodeURIComponent('Your tip page is on')}`);
+    });
+
     r.get('/dashboard', withViewer, async (req, res) => {
         if (!req.viewer) return res.redirect(`/auth/login?next=${encodeURIComponent('/dashboard')}`);
         // Only our own confirmations are shown: a crafted ?done= link cannot put words on the page.
