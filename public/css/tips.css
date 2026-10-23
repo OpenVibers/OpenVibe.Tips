@@ -106,7 +106,8 @@ ul.mod-list, ul.plain { list-style: none; padding: 0; }
 .tp-card p { margin: 0; }
 .tp-card-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .tp-card-top img { border-radius: 50%; object-fit: cover; }
-.tp-live { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: .72rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; background: var(--danger, #dc2626); color: var(--on-accent, #fff); }
+/* The theme's red, darkened enough for small white text (68 %: at least 4.69:1 for every theme's --danger, the light Catppuccin pink included; white on #ef4444 was 3.8:1, axe color-contrast). */
+.tp-live { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: .72rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; background: #b91c1c; background: color-mix(in srgb, var(--danger, #dc2626) 68%, #000); color: #fff; }
 .tp-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
 .tp-chips li { padding: 6px 12px; border-radius: 999px; border: 1px solid var(--tips-border); background: var(--tips-card); font-size: .92rem; }
 .tp-faq { display: grid; gap: 8px; }
