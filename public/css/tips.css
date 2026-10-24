@@ -95,9 +95,11 @@ ul.mod-list, ul.plain { list-style: none; padding: 0; }
 .page.page-wide { max-width: 1080px; }
 .page.page-wide .sc-cta { padding-left: 0; padding-right: 0; }
 @media (min-width: 900px) { .page.page-wide .sc-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-.tp-sec { margin-top: 44px; }
+/* Tips' own sections sit between the shared showcase's (openvibe-shared/showcase.css .sc-sec) on the home page: same
+   typeface, heading size and rhythm, so "Other ways to support" and the questions do not read as another site. */
+.tp-sec { margin-top: 56px; font-family: var(--ov-font, 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif); }
 .tp-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 16px; }
-.tp-head h2 { margin: 0; font-size: clamp(1.3rem, 2.4vw, 1.75rem); letter-spacing: -.01em; }
+.tp-head h2 { margin: 0; font-size: clamp(22px, 2.6vw, 30px); letter-spacing: -.02em; }
 .tp-more { font-weight: 600; font-size: .95rem; text-decoration: none; }
 .tp-more:hover { text-decoration: underline; text-underline-offset: 3px; }
 .tp-lede { margin: 4px 0 14px; color: var(--tips-muted); }
@@ -110,7 +112,7 @@ ul.mod-list, ul.plain { list-style: none; padding: 0; }
 .tp-live { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: .72rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; background: #b91c1c; background: color-mix(in srgb, var(--danger, #dc2626) 68%, #000); color: #fff; }
 .tp-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
 .tp-chips li { padding: 6px 12px; border-radius: 999px; border: 1px solid var(--tips-border); background: var(--tips-card); font-size: .92rem; }
-.tp-faq { display: grid; gap: 8px; }
+.tp-faq { display: grid; gap: 8px; margin-top: 14px; }
 .tp-faq details { border: 1px solid var(--tips-border); border-radius: 12px; background: var(--tips-card); padding: 0 16px; }
 .tp-faq summary { cursor: pointer; font-weight: 600; padding: 12px 0; }
 .tp-faq p { margin: 0 0 14px; color: var(--tips-muted); }
