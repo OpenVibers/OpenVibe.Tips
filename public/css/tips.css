@@ -55,7 +55,7 @@ dl.receipt { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16p
 dl.receipt dt { color: var(--tips-muted); }
 dl.receipt dd { margin: 0; overflow-wrap: anywhere; }
 .big { font-size: 1.8rem; font-weight: 700; margin: 0; }
-.creators { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+.creators { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(180px, 100%), 1fr)); gap: 10px; }
 .creators a { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; background: var(--tips-card); text-decoration: none; color: inherit; }
 .creators img { border-radius: 50%; }
 .steps li { margin: 8px 0; }
