@@ -126,7 +126,7 @@ function home({ creators, live = [] }) {
         ],
         note: "The creator's page shows their own minimums before you pay.",
     }) + `<section class="tp-sec" aria-labelledby="faq"><div class="tp-head"><h2 id="faq">Questions and answers</h2></div><div class="tp-faq">${HOME_FAQ.map((x) => `<details><summary>${esc(x.q)}</summary><p>${esc(x.a)}</p></details>`).join('')}</div></section>`
-    + showcase.cta({ title: 'Stream? Get tipped anywhere.', text: 'Start a tip page, add the overlay to your streaming app and share your link.', actions: [{ label: 'Start your tip page', href: '/dashboard', primary: true }, { label: 'Memberships on OpenVibe.VIP', href: 'https://openvibe.vip/' }] });
+    + showcase.network({ service: 'tips' }) + showcase.cta({ title: 'Stream? Get tipped anywhere.', text: 'Start a tip page, add the overlay to your streaming app and share your link.', actions: [{ label: 'Start your tip page', href: '/dashboard', primary: true }, { label: 'Memberships on OpenVibe.VIP', href: 'https://openvibe.vip/' }] });
 }
 
 /** The tip form: every field works as a plain POST. */
