@@ -63,7 +63,7 @@ function createLayout({ config, release }) {
             logoutUrl: '/auth/logout?next={path}',   // Sign out in the shared navbar ends this site's session too
             notificationsRealtime: true,   // the bell hears new notifications over OpenVibe.Events (Shared 1.22.0)
         };
-        const footer = { service: 'tips', variant: 'full', mount: '#ov-footer', brandName: SITE_NAME, updates: '/updates' };
+        const footer = { service: 'tips', variant: 'auto', path: o.canonicalPath, mount: '#ov-footer', brandName: SITE_NAME, updates: '/updates' };   // full on the front page only (Shared 4.19)
         const who = o.viewer
             ? `<span class="who">Signed in as <b>${esc(o.viewer.name || o.viewer.username || 'you')}</b> · <a href="/auth/logout?next=/">Sign out</a></span>`
             : `<a class="who" href="/auth/login?next=${encodeURIComponent(o.canonicalPath || '/')}">Sign in</a>`;
