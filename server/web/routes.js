@@ -97,7 +97,9 @@ function createWebRoutes({ domain, config, layout, userAuth, liveNow = { list: a
             { '@context': 'https://schema.org', '@type': 'FAQPage', mainEntity: pages.HOME_FAQ.map((x) => ({ '@type': 'Question', name: x.q, acceptedAnswer: { '@type': 'Answer', text: x.a } })) },
         ];
         // Who is live comes from Live once a minute, so the page may be cached as long.
-        html(res, pageFor(req, { active: 'home', canonicalPath: '/', title: 'Tips, paid messages and stream alerts', description: HOME_DESCRIPTION, styles: [require('openvibe-shared/showcase').STYLESHEET], wide: true, body: pages.home({ creators, live }), jsonLd }));
+        html(res, pageFor(req, { active: 'home', canonicalPath: '/', title: 'Tips, paid messages and stream alerts', description: HOME_DESCRIPTION, styles: [require('openvibe-shared/showcase').STYLESHEET], wide: true, body: pages.home({ creators, live }),
+            // The rule that shows the picked part of the home's pick block: one per part, written for this page.
+            inlineStyles: [`@supports selector(:has(*)){@media (max-width:640px){${require('../render/short').pickRules('parts', pages.HOME_PANE_IDS)}}}`], jsonLd }));
     });
     // What shipped on OpenVibe.Tips: the shared update log every OpenVibe site has.
     r.get('/updates', withViewer, (req, res) => html(res, pageFor(req, { canonicalPath: '/updates', title: 'What shipped on OpenVibe.Tips', body: frame.updatesBody({ service: 'tips', siteName: 'OpenVibe.Tips' }) + `<script src="${ovServe.url('shipped.js')}" defer></script>` })));
