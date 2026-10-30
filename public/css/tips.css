@@ -117,3 +117,13 @@ ul.mod-list, ul.plain { list-style: none; padding: 0; }
 .tp-faq summary { cursor: pointer; font-weight: 600; padding: 12px 0; }
 .tp-faq p { margin: 0 0 14px; color: var(--tips-muted); }
 @media (max-width: 600px) { .tp-cards > li:nth-child(n+5) { display: none; } }
+
+/* Touch targets on phones (fleet audit 2026-10-29): the touch-only hit area for this group. Nothing moves with a mouse. */
+@media (pointer: coarse) {
+  /* A card's source label: a vertical-only hit area, the width stays as it is. */
+  .tp-card-top a { position: relative; }
+  .tp-card-top a::after { content: ''; position: absolute; left: 0; right: 0; top: -10px; bottom: -10px; }
+  /* The section's "more" link: the same, a vertical-only hit area. */
+  .tp-more { position: relative; }
+  .tp-more::after { content: ''; position: absolute; left: 0; right: 0; top: -11px; bottom: -11px; }
+}
