@@ -8,7 +8,8 @@
 const assert = require('assert');
 const http = require('http');
 const { boot, check, done } = require('./helpers/app');
-const { createNetworkSender } = require('openvibe-sdk/account-data');
+const { createNetworkSender, uncovered } = require('openvibe-sdk/account-data');
+const { TABLES } = require('../server/domain/account-data');
 
 async function startNetworkStub() {
     const calls = [];
@@ -32,6 +33,13 @@ const envelope = (id, type, payload) => ({ event_id: id, event_type: type, sourc
     const stub = await startNetworkStub();
     const t = await boot({ appOpts: { accountSend: createNetworkSender({ networkInternalUrl: stub.url, clientId: 'tips', clientSecret: 'shh' }) } });
     const { domain, billing } = t;
+    await check('every table that names a person is covered or exempted with a reason', async () => {
+        const missing = await uncovered(t.db, {
+            tables: TABLES,
+            exempt: { account_data_events: 'the ledger of requests itself: which export and deletion Tips applied' },
+        });
+        assert.deepStrictEqual(missing, [], `a table with a person column is neither covered nor exempted: ${missing.join(', ')}`);
+    });
     const count = async (sql, args) => Number(await t.db.value(sql, args));
     const alex = await t.creator('alex');
     const bea = await t.creator('bea');
