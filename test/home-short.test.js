@@ -12,44 +12,30 @@ const { boot, check, done } = require('./helpers/app');
 (async () => {
     const t = await boot();
     try {
-        await check('the home is one pick block: a chip per part, the first picked, every part in the page', async () => {
+        await check('the home shows every part: no chip row, every part in the page', async () => {
             const r = await t.call('GET', '/', { token: null });
             assert.strictEqual(r.status, 200, r.text);
             const page = r.text;
-            const block = page.slice(page.indexOf('<div class="pick" id="pick-parts">'), page.indexOf('<div class="pick" id="pick-parts">') + 60000);
-            assert.ok(block.startsWith('<div class="pick" id="pick-parts">'), 'the pick block is on the home');
-            assert.match(block, /<div class="pick-row" role="radiogroup" aria-label="What Tips does">/);
-            const chips = [...block.matchAll(/<input type="radio" name="pick-parts" id="pk-parts-([a-z-]+)" value="\1"( checked)?><label for="pk-parts-\1">([^<]+)<\/label>/g)];
-            assert.ok(chips.length >= 5, `a chip per part (${chips.length})`);
-            assert.deepStrictEqual(chips.filter((m) => m[2]).map((m) => m[1]), [chips[0][1]], 'the first part is picked');
-            // Every part stays in the page, with the id its chip picks.
-            const panes = [...block.matchAll(/<div class="pick-pane" id="([a-z-]+)">/g)].map((m) => m[1]);
-            assert.deepStrictEqual(panes, chips.map((m) => m[1]), 'every part is in the page, one per chip');
-            // The parts themselves are all there: nothing was removed.
+            assert.ok(!page.includes('pick-parts'), 'the pick block is gone');
             for (const title of ['What you can send', 'For creators', 'Other ways to support', 'How it works', 'What it costs to send']) {
                 assert.ok(page.includes(title), `${title} is on the page`);
             }
         });
 
-        await check('the CSS guard: the chips are hidden and the parts all show until 640 px and where :has() is understood', async () => {
-            const r = await t.call('GET', '/', { token: null });
-            const page = r.text;
-            assert.match(page, /<style>@supports selector\(:has\(\*\)\)\{@media \(max-width:640px\)\{\.pick:has\(#pk-parts-send:checked\) #send\{display:block\}/, 'the rule that shows the picked part');
+        await check('nothing hides a part or a card on a phone', async () => {
+            const page = (await t.call('GET', '/', { token: null })).text;
+            assert.ok(!page.includes('@supports selector(:has(*)){@media (max-width:640px){.pick:has'), 'no pick rule is written for the parts');
             const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'css', 'tips.css'), 'utf8');
-            assert.match(css, /\.pick-row \{ display: none; \}/, 'the chips are hidden by default');
-            assert.match(css, /@supports selector\(:has\(\*\)\) \{ @media \(max-width: 640px\) \{/, 'the phone rules are under :has() and 640 px');
-            assert.match(css, /\.pick-row label \{[^}]*min-height: 44px/, 'a chip is a 44 px target');
-            assert.match(css, /\.pick \.pick-pane \{ display: none; \}/, 'the parts are hidden on a phone');
+            assert.ok(!/\.tp-cards > li:nth-child\(n\+5\) \{ display: none/.test(css), 'no card is hidden');
         });
 
-        await check('the parts a reader rarely needs are folds, open in the page and closed on a phone', async () => {
+        await check('the parts a reader rarely needs are folds that start open on every screen', async () => {
             const r = await t.call('GET', '/', { token: null });
             const page = r.text;
             for (const id of ['faq', 'network', 'shipped']) {
                 assert.ok(page.includes(`<details class="tp-fold tp-fold-block" id="${id}" open>`), `${id} is a fold, open in the page`);
-                assert.ok(page.includes(`document.getElementById("${id}")`), `${id} has the script that closes it on a phone`);
+                assert.ok(!page.includes(`document.getElementById("${id}")`), `${id} is never closed by script`);
             }
-            // The content of the folds stays in the page.
             assert.match(page, /What are Vibes\?/);
             assert.match(page, /Part of OpenVibe/);
         });
