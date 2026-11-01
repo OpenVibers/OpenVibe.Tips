@@ -13,6 +13,10 @@ const { pickBlock, pickRules, foldBlock } = require('../render/short');
 
 const n = (v) => Number(v || 0).toLocaleString('en-US');
 const when = (s) => (s ? esc(String(s).replace('T', ' ').slice(0, 16)) + ' UTC' : '');
+// A Media object is stored at full size: ask its resize ladder for the width drawn on this page (96 for the 40 px
+// creator card, 320 for the 96 px creator page head). Any other URL — an avatar from another host, or one already
+// sized — is used unchanged.
+const mediaSrc = (u, w) => (/^https:\/\/openvibe\.media\/o\/med_[0-9A-Za-z]+$/.test(String(u || '')) ? `${u}?w=${w}` : u);
 const KIND_LABEL = { tip: 'Tip', paid_message: 'Paid message', tts: 'Text-to-speech', media_request: 'Media request', sound: 'Sound' };
 const PAY_LABEL = { pending: 'Payment pending', settled: 'Paid', reversed: 'Reversed', failed: 'Payment failed' };
 const DELIVERY_LABEL = { awaiting_payment: 'Waiting for payment', queued: 'Being delivered', delivered: 'Delivered', failed: 'Delivery failed', cancelled: 'Cancelled' };
@@ -78,7 +82,7 @@ const HOME_PANE_IDS = ['send', 'for-creators', 'services', 'how', 'costs'];
 function home({ creators, live = [] }) {
     const m = NEW_PAGE_MINIMUMS;
     const liveCards = live.length ? `<ul class="tp-cards">${live.map((c) => `<li class="tp-card"><p class="tp-card-top"><span class="tp-live">Live</span> <a href="${esc(c.url)}"><strong>${esc(c.name)}</strong></a></p>${c.title ? `<p>${esc(c.title)}</p>` : ''}<p class="meta">${[c.category, watching(c.viewers)].filter(Boolean).map(esc).join(' · ')}</p></li>`).join('')}</ul>` : '';
-    const creatorCards = creators.length ? `<ul class="tp-cards">${creators.map((c) => `<li class="tp-card"><p class="tp-card-top">${c.avatar_url ? `<img src="${esc(c.avatar_url)}" alt="" width="40" height="40" loading="lazy">` : ''}<a href="/${esc(c.handle)}"><strong>${esc(c.display_name)}</strong></a></p>${c.headline ? `<p>${esc(c.headline)}</p>` : ''}${c.goal ? `<p class="meta">Goal: ${esc(c.goal.title)}</p><div class="bar" role="progressbar" aria-label="${esc(c.goal.title)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${c.goal.percent}"><span style="width:${c.goal.percent}%"></span></div>` : ''}</li>`).join('')}</ul>` : '';
+    const creatorCards = creators.length ? `<ul class="tp-cards">${creators.map((c) => `<li class="tp-card"><p class="tp-card-top">${c.avatar_url ? `<img src="${esc(mediaSrc(c.avatar_url, 96))}" alt="" width="40" height="40" loading="lazy">` : ''}<a href="/${esc(c.handle)}"><strong>${esc(c.display_name)}</strong></a></p>${c.headline ? `<p>${esc(c.headline)}</p>` : ''}${c.goal ? `<p class="meta">Goal: ${esc(c.goal.title)}</p><div class="bar" role="progressbar" aria-label="${esc(c.goal.title)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${c.goal.percent}"><span style="width:${c.goal.percent}%"></span></div>` : ''}</li>`).join('')}</ul>` : '';
     return showcase.hero({
         eyebrow: 'OpenVibe.Tips',
         title: 'Support the creators', accent: 'you watch',
@@ -220,7 +224,7 @@ function creatorPage({ profile, goals, viewer, csrf, idem, values, providers, er
     const active = goals.filter((g) => g.status === 'active');
     return `${ownerPreview ? '<p class="notice">Your page is switched off: only you can see it, and search engines are told not to index it. Switch it on in the <a href="/dashboard">dashboard</a>.</p>' : ''}
 <section class="creator-head">
-  ${profile.avatar_url ? `<img class="avatar" src="${esc(profile.avatar_url)}" alt="" width="96" height="96">` : ''}
+  ${profile.avatar_url ? `<img class="avatar" src="${esc(mediaSrc(profile.avatar_url, 320))}" alt="" width="96" height="96">` : ''}
   <div><h1>${esc(profile.display_name)}</h1>${profile.headline ? `<p class="headline">${esc(profile.headline)}</p>` : ''}
   <p class="links"><a href="https://openvibe.live/@${esc(profile.handle)}">Watch on OpenVibe.Live</a> · <a href="/${esc(profile.handle)}/goals">Goals</a>${profile.page.supporters_page ? ` · <a href="/${esc(profile.handle)}/supporters">Supporters</a>` : ''}</p></div>
 </section>

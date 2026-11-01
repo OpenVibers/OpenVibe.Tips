@@ -41,6 +41,18 @@ const { boot, check, done } = require('./helpers/app');
         assert.ok(!(await get('/alex')).text.includes('showcase.css'), 'only the home links the kit');
     });
 
+    await check('a Media avatar is asked for the width the page draws; an already sized URL is left alone', async () => {
+        const obj = 'https://openvibe.media/o/med_01M644DY8BFX4H7MTRKPGG052R';
+        await t.db.exec(`UPDATE creator_tip_profiles SET avatar_url = '${obj}' WHERE handle = 'alex'`);
+        assert.ok((await get('/')).text.includes(`<img src="${obj}?w=96" alt="" width="40" height="40" loading="lazy">`), 'the 40 px creator card asks for 96');
+        assert.ok((await get('/alex')).text.includes(`<img class="avatar" src="${obj}?w=320" alt="" width="96" height="96">`), 'the 96 px creator page head asks for 320');
+        await t.db.exec(`UPDATE creator_tip_profiles SET avatar_url = '${obj}?w=64' WHERE handle = 'alex'`);
+        const sized = await get('/');
+        assert.ok(sized.text.includes(`src="${obj}?w=64"`), 'the URL is used as stored');
+        assert.ok(!sized.text.includes(`${obj}?w=64?w=`), 'no second query');
+        await t.db.exec("UPDATE creator_tip_profiles SET avatar_url = NULL WHERE handle = 'alex'");
+    });
+
     await check('the home quotes the minimums a new page really starts with (the migration defaults)', () => {
         const read = (f) => require('fs').readFileSync(require('path').join(__dirname, '..', 'migrations', f), 'utf8');
         const sql = read('0001_initial.sql') + read('0005_paid_sounds.sql');
