@@ -82,6 +82,24 @@ function home({ creators, live = [] }) {
     return showcase.hero({
         eyebrow: 'OpenVibe.Tips',
         title: 'Support the creators', accent: 'you watch',
+        // The hero's picture is this site's own (2026-11-01): it drew the generic aura, the same on six homes.
+        // What a viewer can send, around the creator.
+        orbit: {
+            label: 'What you can send',
+            center: { title: 'The creator', sub: 'gets it' },
+            inner: [
+                { icon: 'ov:tips', label: 'A tip', href: '#send' },
+                { icon: 'ov:chat', label: 'Paid message', href: '#send' },
+                { icon: 'ov:audio', label: 'Read out', href: '#send' },
+                { icon: 'ov:video', label: 'Video request', href: '#send' },
+                { icon: 'ov:bell', label: 'A sound', href: '#send' },
+            ],
+            outer: [
+                { icon: 'ov:live', label: 'Live', href: 'https://openvibe.live/' },
+                { icon: 'ov:vip', label: 'VIP', href: 'https://openvibe.vip/' },
+                { icon: 'ov:billing', label: 'Billing', href: 'https://billing.openvibe.network/' },
+            ],
+        },
         lede: 'Tip a creator with Vibes, send a highlighted paid message, have your message read out, request a video or play one of their sounds on stream. Creators set goals and show every tip with overlays that work on any streaming app.',
         actions: [
             ...(creators.length ? [{ label: 'Find a creator', href: '#creators', primary: true }] : live.length ? [{ label: 'See who is live', href: '#live', primary: true }] : []),
