@@ -139,7 +139,22 @@ function createApp(opts = {}) {
         },
     }));
     const liveNow = opts.liveNow || require('./clients/live-now').createLiveNow({ config, fetchImpl: opts.fetchImpl, log });
-    app.use(createWebRoutes({ domain, config, layout, userAuth, liveNow }));
+    // The agent layer (openvibe-shared/agent-layer): /.well-known/agent.json and the Markdown twins of the
+    // public pages (server/agent-pages.js). The pages keep their own routes — a signed-in viewer's tip form,
+    // account bar and anti-forgery token are theirs — so only the manifest and twin requests reach this
+    // mount; the pages advertise the twin themselves (web/layout.js and web/routes.js).
+    const webRoutes = createWebRoutes({ domain, config, layout, userAuth, liveNow });
+    const agentLayer = express();
+    require('openvibe-shared/agent-layer').mount(agentLayer, {
+        descriptor: require('./agent-descriptor'),
+        render: require('./agent-pages').createAgentPages({ domain, config, layout, liveNow }).renderPublicPage,
+    });
+    app.use((req, res, next) => {
+        const twin = req.path.endsWith('.md') || (req.query && req.query.format === 'markdown') || String(req.headers.accept || '').includes('text/markdown');
+        if (req.path !== '/.well-known/agent.json' && !twin) return next();
+        return agentLayer(req, res, next);
+    });
+    app.use(webRoutes);
 
     app.use((req, res) => {
         if (req.path.startsWith('/api/') || req.path.startsWith('/internal/')) return http.sendProblem(res, 404, 'not_found', { ctx: req.ov });

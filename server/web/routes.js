@@ -60,7 +60,14 @@ function createWebRoutes({ domain, config, layout, userAuth, liveNow = { list: a
     const secret = config.formSecret || crypto.randomBytes(32).toString('hex');
 
     const html = (res, body, status = 200, extraHeaders = {}) => res.status(status).set({ 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache', ...extraHeaders }).send(body);
-    const pageFor = (req, o) => layout.page({ viewer: req.viewer, ...o });
+    const pageFor = (req, o) => {
+        // A public page names its Markdown twin in the Link header, exactly as the agent layer's own
+        // responses do; a page rendered for a signed-in person (noindex) has no twin and no header.
+        if (o && o.canonicalPath && !String(o.robots || 'index,follow').includes('noindex')) {
+            req.res.set('Link', require('openvibe-shared/agent-layer').linkHeaderTags(layout.abs(o.canonicalPath), `${String(config.baseUrl).replace(/\/+$/, '')}/llms.txt`).header);
+        }
+        return layout.page({ viewer: req.viewer, ...o });
+    };
     const notFound = (req, res) => html(res, pageFor(req, { title: 'Not found', robots: 'noindex', body: pages.errorPage({ status: 404, title: 'Nothing here', message: 'That page does not exist, or its creator has not switched it on.' }) }), 404);
 
     // Anti-forgery for signed-in forms: HMAC(subject, day), valid today and yesterday.
