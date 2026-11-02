@@ -509,7 +509,7 @@ function createWebRoutes({ domain, config, layout, userAuth, liveNow = { list: a
         // The page shows what the public sees, for the creator too (a preview); the dashboard has the rest.
         const list = await goals.publicGoals(db, await goals.list(db, p.creator_subject), p);
         const csrf = req.viewer ? csrfFor(req.viewer.subject) : '';
-        const jsonLd = p.page_enabled ? [{ '@context': 'https://schema.org', '@type': 'ProfilePage', name: `${p.display_name} on ${'OpenVibe.Tips'}`, url: `${config.baseUrl}/${p.handle}`, mainEntity: { '@type': 'Person', name: p.display_name, alternateName: p.handle, image: p.avatar_url || undefined } }] : [];
+        const jsonLd = p.page_enabled ? [{ '@context': 'https://schema.org', '@type': 'ProfilePage', name: p.display_name, url: `${config.baseUrl}/${p.handle}`, mainEntity: { '@type': 'Person', name: p.display_name, alternateName: p.handle, image: p.avatar_url || undefined } }] : [];
         return html(res, pageFor(req, {
             title: `Support ${p.display_name}`, active: 'creator', canonicalPath: `/${p.handle}`,
             description: p.headline || `Tip ${p.display_name} on OpenVibe.Tips: tips, goals, paid messages${p.tts_enabled ? ', text-to-speech' : ''}${p.media_requests_enabled ? ', media requests' : ''}.`,
