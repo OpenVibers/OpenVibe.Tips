@@ -25,7 +25,8 @@ h1 { font-size: 1.8rem; margin: .2em 0 .5em; }
 .card { background: var(--tips-card); border: 1px solid var(--tips-border); border-radius: 12px; padding: 18px 20px; margin: 18px 0; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; }
 .grid .card { margin: 0; }
-.btn { display: inline-block; background: var(--tips-accent); color: var(--tips-on-accent); border: 0; border-radius: 8px; padding: 9px 16px; font: inherit; font-weight: 600; cursor: pointer; text-decoration: none; }
+/* A filled button wears the theme's strong accent, made for text on it (4.5:1; the plain accent is for links). */
+.btn { display: inline-block; background: var(--accent-strong, var(--tips-accent)); color: var(--on-accent-strong, var(--tips-on-accent)); border: 0; border-radius: 8px; padding: 9px 16px; font: inherit; font-weight: 600; cursor: pointer; text-decoration: none; }
 .btn.ghost { background: transparent; color: var(--tips-accent); border: 1px solid var(--tips-accent); }
 form label { display: block; margin: 10px 0; }
 form input[type=text], form input[type=number], form input[type=url], form textarea, form select, input.copy {
