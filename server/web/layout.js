@@ -12,6 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const appIcon = require('openvibe-shared/app-icon');
 const frame = require('openvibe-shared/frame');
+const { foldBlock } = require('../render/short');
 const shell = require('openvibe-shared/shell');
 
 const SITE_NAME = 'OpenVibe.Tips';
@@ -92,12 +93,14 @@ function createLayout({ config, release }) {
                 `<meta name="ov-boost" content="tips@${esc(RELEASE)}">`,
                 `<script src="${ovServe.url('boost.js')}" data-main="#main" defer></script>`,
                 `<script src="${asset('js/tips.js')}" defer></script>`,
+                // The rules that show the picked part of a pick block are written for the page, because there is one per part.
+                ...(o.inlineStyles || []).map((css) => `<style>${css}</style>`),
             ].filter(Boolean).join('\n'),
             body: `<div id="navbar-mount"></div>
 <header class="site-head"><a class="brand" href="/">${SITE_NAME}</a><nav>${NAV_LINKS.map((l) => `<a href="${l.href}"${o.active === l.label.toLowerCase() ? ' aria-current="page"' : ''}>${l.label}</a>`).join('')}</nav>${who}</header>
 <main id="main" class="page${o.wide ? ' page-wide' : ''}">
 ${o.body || ''}
-${o.canonicalPath === '/' && o.active === 'home' ? frame.shipped({ service: 'tips', title: `Recently shipped on ${SITE_NAME}` }) : ''}
+${o.canonicalPath === '/' && o.active === 'home' ? foldBlock({ id: 'shipped', head: `<h2 id="h-shipped">Recently shipped on ${SITE_NAME}</h2>`, html: frame.shipped({ service: 'tips', title: `Recently shipped on ${SITE_NAME}` }) }) : ''}
 </main>
 <script>
 window.__OV_PAGE = ${JSON.stringify({ navbar: nav, footer }).replace(/</g, '\\u003c')};

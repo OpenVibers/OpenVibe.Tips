@@ -117,3 +117,50 @@ ul.mod-list, ul.plain { list-style: none; padding: 0; }
 .tp-faq summary { cursor: pointer; font-weight: 600; padding: 12px 0; }
 .tp-faq p { margin: 0 0 14px; color: var(--tips-muted); }
 @media (max-width: 600px) { .tp-cards > li:nth-child(n+5) { display: none; } }
+
+/* Touch targets on phones (fleet audit 2026-10-29): the touch-only hit area for this group. Nothing moves with a mouse. */
+@media (pointer: coarse) {
+  /* A card's source label: a vertical-only hit area, the width stays as it is. */
+  .tp-card-top a { position: relative; }
+  .tp-card-top a::after { content: ''; position: absolute; left: 0; right: 0; top: -10px; bottom: -10px; }
+  /* The section's "more" link: the same, a vertical-only hit area. */
+  .tp-more { position: relative; }
+  .tp-more::after { content: ''; position: absolute; left: 0; right: 0; top: -11px; bottom: -11px; }
+}
+
+/* Pick: on a phone every pane is shown, stacked, each with its own heading; the chips are a row of links that
+   jump to a pane (the owner's rule, 2026-10-31: never hide content to shorten). A wide screen shows the panes as
+   before, with no chips. */
+.pick-head, .pick-row { display: none; }
+@media (max-width: 640px) {
+  .pick-bar { margin-top: 30px; }
+  .pick-head { display: block; }
+  .pick-head h2 { margin: 0 0 4px; font: 700 clamp(20px, 2.4vw, 28px)/1.2 var(--ov-font, 'Inter', system-ui, sans-serif); letter-spacing: -.02em; }
+  .pick-row { display: flex; gap: 8px; overflow-x: auto; margin: 10px -16px 0; padding: 2px 16px 4px; scrollbar-width: none; overscroll-behavior-x: contain; }
+  .pick-row::-webkit-scrollbar { display: none; }
+  .pick-chip { display: inline-flex; align-items: center; flex: none; min-height: 44px; padding: 0 15px; border-radius: 999px; border: 1px solid var(--border, #1f2d47); color: var(--text-secondary, #96a7c2); font-size: .9rem; font-weight: 650; white-space: nowrap; text-decoration: none; }
+  .pick-chip:hover, .pick-chip:focus-visible { color: var(--text-primary, #e6edf7); border-color: var(--accent, #3b82f6); }
+  .pick-chip:focus-visible { outline: 2px solid var(--accent, #3b82f6); outline-offset: 2px; }
+  .pick .pick-pane { scroll-margin-top: 72px; }
+  .pick .pick-pane + .pick-pane { margin-top: 26px; }
+}
+
+/* The fold (the owner's short-pages rule): closed on a phone, and where there is room it looks like the section it
+   replaces: a heading and its content, with no card around it. */
+.tp-fold-block { margin-top: 32px; border: 1px solid var(--border, #1f2d47); border-radius: 14px; background: var(--bg-card, #131c2e); }
+.tp-fold-block > summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 48px; padding: 0 16px; cursor: pointer; font-weight: 700; list-style: none; }
+.tp-fold-block > summary::-webkit-details-marker { display: none; }
+.tp-fold-block > summary h2 { margin: 0; font: 700 clamp(19px, 2.2vw, 26px)/1.2 var(--ov-font, 'Inter', system-ui, sans-serif); }
+.tp-fold-block > summary:focus-visible { outline: 2px solid var(--accent, #3b82f6); outline-offset: -2px; border-radius: 14px; }
+.tp-fold-block .tp-sec { margin: 0; padding: 0 16px 16px; }
+.tp-fold-block .tp-head h2 { display: none; }
+.tp-fold-block .sc-sec { margin: 0; max-width: none; padding: 0 16px 16px; }
+.tp-fold-block .sc-sec > h2 { display: none; }
+@media (min-width: 641px) {
+  .tp-fold-block { border: 0; background: none; border-radius: 0; margin: 56px auto 0; padding: 0; }
+  .tp-fold-block > summary { display: block; min-height: 0; padding: 0; }
+  .tp-fold-block > summary h2 { margin: 0 0 6px; font: 700 clamp(22px, 2.6vw, 30px)/1.2 var(--ov-font, 'Inter', system-ui, sans-serif); }
+  .tp-fold-block > summary span { display: none; }
+  .tp-fold-block .tp-sec, .tp-fold-block .sc-sec { margin: 0; max-width: none; padding: 0; }
+}
+@media (max-width: 640px) { .tp-fold-block { margin-top: 24px; } .tp-fold-block > summary h2 { font-size: 1.05rem; } }
