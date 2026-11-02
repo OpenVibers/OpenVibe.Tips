@@ -9,7 +9,7 @@ const showcase = require('openvibe-shared/showcase');
 const { esc } = require('./layout');
 const { VOICES } = require('../domain/profiles');
 const supportLinks = require('../domain/support-links');
-const { pickBlock, pickRules, foldBlock } = require('../render/short');
+const { pickBlock, foldBlock } = require('../render/short');
 
 const n = (v) => Number(v || 0).toLocaleString('en-US');
 const when = (s) => (s ? esc(String(s).replace('T', ' ').slice(0, 16)) + ' UTC' : '');

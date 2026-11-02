@@ -128,30 +128,22 @@ ul.mod-list, ul.plain { list-style: none; padding: 0; }
   .tp-more::after { content: ''; position: absolute; left: 0; right: 0; top: -11px; bottom: -11px; }
 }
 
-/* Pick (the owner's short-pages rule, 2026-10-30): on a phone the front page's five parts are one at a time, picked
-   with a row of chips. Radio inputs and :has(), no script: the chips and the one-part rule live under 640 px and only
-   where :has() is understood, so a wider screen, or an older browser, shows every part and no chips. Every part stays
-   in the page for crawlers. */
-.pick-head { display: none; }
-.pick-row { display: none; }
-@supports selector(:has(*)) { @media (max-width: 640px) {
+/* Pick: on a phone every pane is shown, stacked, each with its own heading; the chips are a row of links that
+   jump to a pane (the owner's rule, 2026-10-31: never hide content to shorten). A wide screen shows the panes as
+   before, with no chips. */
+.pick-head, .pick-row { display: none; }
+@media (max-width: 640px) {
   .pick-bar { margin-top: 30px; }
   .pick-head { display: block; }
   .pick-head h2 { margin: 0 0 4px; font: 700 clamp(20px, 2.4vw, 28px)/1.2 var(--ov-font, 'Inter', system-ui, sans-serif); letter-spacing: -.02em; }
   .pick-row { display: flex; gap: 8px; overflow-x: auto; margin: 10px -16px 0; padding: 2px 16px 4px; scrollbar-width: none; overscroll-behavior-x: contain; }
   .pick-row::-webkit-scrollbar { display: none; }
-  .pick-row input { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
-  .pick-row label { display: inline-flex; align-items: center; flex: none; min-height: 44px; padding: 0 15px; border-radius: 999px; border: 1px solid var(--border, #1f2d47); color: var(--text-secondary, #96a7c2); font-size: .9rem; font-weight: 650; white-space: nowrap; cursor: pointer; }
-  .pick-row input:checked + label { color: var(--text-primary, #e6edf7); border-color: var(--accent, #3b82f6); background: color-mix(in srgb, var(--accent, #3b82f6) 12%, transparent); }
-  .pick-row input:focus-visible + label { outline: 2px solid var(--accent, #3b82f6); outline-offset: 2px; }
-  .pick .pick-pane { display: none; }
-  /* A link that points at a part opens that part on a phone too. */
-  .pick .pick-pane:target { display: block !important; }
-  .pick:has(.pick-pane:target) .pick-pane:not(:target) { display: none !important; }
-  /* The chip names the part, so the part's own heading gives way to it. */
-  .pick .pick-pane .tp-head h2, .pick .pick-pane .sc-sec > h2 { display: none; }
-  .pick .pick-pane .tp-head { justify-content: flex-end; }
-} }
+  .pick-chip { display: inline-flex; align-items: center; flex: none; min-height: 44px; padding: 0 15px; border-radius: 999px; border: 1px solid var(--border, #1f2d47); color: var(--text-secondary, #96a7c2); font-size: .9rem; font-weight: 650; white-space: nowrap; text-decoration: none; }
+  .pick-chip:hover, .pick-chip:focus-visible { color: var(--text-primary, #e6edf7); border-color: var(--accent, #3b82f6); }
+  .pick-chip:focus-visible { outline: 2px solid var(--accent, #3b82f6); outline-offset: 2px; }
+  .pick .pick-pane { scroll-margin-top: 72px; }
+  .pick .pick-pane + .pick-pane { margin-top: 26px; }
+}
 
 /* The fold (the owner's short-pages rule): closed on a phone, and where there is room it looks like the section it
    replaces: a heading and its content, with no card around it. */
