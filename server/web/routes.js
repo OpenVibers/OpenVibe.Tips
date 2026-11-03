@@ -123,20 +123,24 @@ function createWebRoutes({ domain, config, layout, userAuth, liveNow = { list: a
         res.type('application/xml').set('Cache-Control', cache.htmlHeaders({ maxAge: 900 })).send(seo.sitemapXml(urls));
     });
     // /llms.txt (llmstxt.org): a plain-markdown map of the site for language-model crawlers.
+    // AGT-5: each of this site's own pages is linked at its Markdown twin (markdown: true, base: the site origin).
     r.get('/llms.txt', (req, res) => res.type('text/plain').set('Cache-Control', cache.htmlHeaders({ maxAge: 3600 })).send(seo.llmsTxt({
         name: SITE_NAME,
+        markdown: true,
+        base: config.baseUrl,
         summary: SITE_SUMMARY,
         details: 'A creator page lists the goals and a tip form that works without JavaScript; tips settle through Billing, and Tips owns the interaction, the goals and the overlay alerts. The home page lists creators whose pages are switched on. Reading any public page needs no account; tipping needs a signed-in supporter, and the dashboard, receipts, moderation, overlays, sign-in and the API are per-person and never listed here.',
         sections: [
             { title: 'Start here', links: [
                 { title: 'Creators on OpenVibe.Tips', url: `${config.baseUrl}/`, note: 'every creator with their page switched on' },
-                { title: 'What shipped on OpenVibe.Tips', url: `${config.baseUrl}/updates` },
             ] },
-            { title: 'Machine-readable', links: [
-                { title: 'Sitemap', url: `${config.baseUrl}/sitemap.xml`, note: 'the public pages, with lastmod' },
-                { title: 'robots.txt', url: `${config.baseUrl}/robots.txt` },
-                { title: 'llms-full.txt', url: `${config.baseUrl}/llms-full.txt`, note: 'this same map with the full text of each public page' },
-            ] },
+        ],
+        // llmstxt.org's "## Optional": what an agent may skip when it needs a shorter context.
+        optional: [
+            { title: 'What shipped on OpenVibe.Tips', url: `${config.baseUrl}/updates` },
+            { title: 'Sitemap', url: `${config.baseUrl}/sitemap.xml`, note: 'the public pages, with lastmod' },
+            { title: 'robots.txt', url: `${config.baseUrl}/robots.txt` },
+            { title: 'llms-full.txt', url: `${config.baseUrl}/llms-full.txt`, note: 'this same map with the full text of each public page' },
         ],
     })));
     // /llms-full.txt: the /llms.txt header plus the full plain text of every public page. The creator
