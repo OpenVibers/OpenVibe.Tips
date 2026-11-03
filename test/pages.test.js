@@ -144,8 +144,18 @@ const { boot, check, done } = require('./helpers/app');
         assert.strictEqual(llms.status, 200);
         assert.match(llms.headers.get('content-type'), /^text\/plain/);
         assert.match(llms.text, /^# /, 'llms.txt starts with a markdown heading');
-        assert.match(llms.text, /\[Creators on OpenVibe\.Tips\]\(http:\/\/tips\.test\/\)/, 'llms.txt lists the main public pages');
+        assert.match(llms.text, /\[Creators on OpenVibe\.Tips\]\(http:\/\/tips\.test\/index\.md\)/, 'llms.txt lists the home at its twin');
         assert.match(llms.text, /\[llms-full\.txt\]\(http:\/\/tips\.test\/llms-full\.txt\)/, 'llms.txt points at llms-full.txt');
+        // AGT-5: every page at its Markdown twin, the Optional section last.
+        assert.match(llms.text, /\n## Optional\n/);
+        assert.match(llms.text, /\n## Optional\n\n[\s\S]*\[Sitemap\]\(http:\/\/tips\.test\/sitemap\.xml\)/);
+        assert.strictEqual(llms.text.lastIndexOf('\n## '), llms.text.indexOf('\n## Optional'), 'Optional is the last section');
+        const own = [...llms.text.matchAll(/\]\((http:\/\/tips\.test[^)\s]*)\)( \(HTML\))?/g)];
+        assert.ok(own.length > 2, String(own.length));
+        for (const [, url, html] of own) {
+            const p = new URL(url).pathname;
+            assert.ok(p.endsWith('.md') || /\.[a-z0-9]+$/.test(p) || html, `${url} is a twin, a file or marked (HTML)`);
+        }
         const full = await get('/llms-full.txt');
         assert.strictEqual(full.status, 200);
         assert.match(full.headers.get('content-type'), /^text\/plain/);
