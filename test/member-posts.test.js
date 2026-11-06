@@ -43,6 +43,11 @@ const JOIN = 'https://openvibe.vip/alice#plan-gold';
         assert.ok(page.text.includes(JOIN), 'the join link is on the card');
         assert.ok(!page.text.includes(SECRET), 'the text never reaches a stranger');
 
+        // 1b. The JSON-LD of the page carries no text either.
+        const ld = (page.text.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/) || [])[1] || '';
+        assert.ok(ld.length > 0, 'the page has its JSON-LD');
+        assert.ok(!ld.includes(SECRET), 'the JSON-LD carries no text');
+
         // 2. The machine-readable pages carry no text either.
         const llms = await t.call('GET', '/llms-full.txt');
         assert.equal(llms.status, 200);
@@ -50,6 +55,9 @@ const JOIN = 'https://openvibe.vip/alice#plan-gold';
         const sitemap = await t.call('GET', '/sitemap.xml');
         assert.equal(sitemap.status, 200);
         assert.ok(!sitemap.text.includes(SECRET), 'the sitemap carries no text');
+        // The Markdown twin of the creator page (the agent layer): the title, never the text.
+        const twin = await t.call('GET', '/alice.md');
+        assert.ok(!twin.text.includes(SECRET), 'the Markdown twin carries no text');
 
         // 3. The API list never carries a body; the body route refuses a stranger.
         const list = await t.call('GET', '/api/v1/profiles/alice/posts', { user: stranger });
