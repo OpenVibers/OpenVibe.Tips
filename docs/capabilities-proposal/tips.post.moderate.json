@@ -1,0 +1,20 @@
+{
+  "id": "tips.post.moderate",
+  "version": "1.0",
+  "owner": "tips",
+  "status": "active",
+  "visibility": "first-party",
+  "description": "Hide a members-only post and show it again. A hidden post is not served at all.",
+  "permissions": [
+    "tips:posts"
+  ],
+  "resourceConstraints": [
+    "owner"
+  ],
+  "quotaClass": "standard",
+  "events": [],
+  "implementedBy": [
+    "POST /api/v1/posts/:id/hide",
+    "POST /api/v1/posts/:id/unhide"
+  ]
+}

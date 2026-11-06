@@ -81,6 +81,20 @@ function loadConfig(env = process.env) {
             powerchatLinkTemplate: env.TIPS_POWERCHAT_LINK_TEMPLATE || '',
         },
 
+        // OpenVibe.VIP: the gate of the members-only posts (server/vip/client.js). A service token for
+        // audience openvibe.vip with the capability vip.entitlement.check — the Network needs the grant
+        // "tips vip.entitlement.check openvibe.vip"; without it every answer is a denial (fail-closed).
+        vip: {
+            url: trim(env.TIPS_VIP_URL || 'http://127.0.0.1:4620'),
+            publicUrl: trim(env.TIPS_VIP_PUBLIC_URL || 'https://openvibe.vip'),
+            audience: env.TIPS_VIP_AUDIENCE || 'openvibe.vip',
+            timeoutMs: int(env.TIPS_VIP_TIMEOUT_MS, 2000),
+            ttlMs: int(env.TIPS_VIP_CACHE_TTL_MS, 30_000),
+            denyTtlMs: int(env.TIPS_VIP_DENY_TTL_MS, 10_000),
+            unavailableTtlMs: int(env.TIPS_VIP_UNAVAILABLE_TTL_MS, 2_000),
+            plansTtlMs: int(env.TIPS_VIP_PLANS_TTL_MS, 60_000),
+        },
+
         events: {
             url: trim(env.EVENTS_URL || ''),
             intervalMs: int(env.EVENTS_RELAY_INTERVAL_MS, 2000),

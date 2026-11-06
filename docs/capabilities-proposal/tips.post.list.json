@@ -1,0 +1,20 @@
+{
+  "id": "tips.post.list",
+  "version": "1.0",
+  "owner": "tips",
+  "status": "active",
+  "visibility": "first-party",
+  "description": "Read the members-only posts of a creator: the title and the tiers. The text is served only to a member of a tier that reads it.",
+  "permissions": [
+    "tips:posts"
+  ],
+  "resourceConstraints": [
+    "owner"
+  ],
+  "quotaClass": "standard",
+  "events": [],
+  "implementedBy": [
+    "GET /api/v1/profiles/:creator/posts",
+    "GET /api/v1/profiles/:creator/posts/:id"
+  ]
+}

@@ -34,11 +34,21 @@ const { createInteractions } = require('./interactions');
 const { createEffects } = require('./effects');
 const { createModeration } = require('./moderation');
 const { createSounds } = require('./sounds');
+const { createPosts } = require('./posts');
 
 const MONEY = { isolation: 'serializable' };
 
-function createDomain({ db, config, outbox, billing, adapters, valkey = null, now = () => Date.now(), log = console, indexnow = null }) {
-    const ctx = { db, config, now, log, outbox, billing, adapters, valkey, indexnow, MONEY };
+function createDomain({ db, config, outbox, billing, adapters, valkey = null, now = () => Date.now(), log = console, indexnow = null, vip = null }) {
+    // OpenVibe.VIP without a client (no secret, no grant): every membership is a denial, every tier list
+    // is empty and no join link is offered — the members-only posts stay shut.
+    const noVip = {
+        enabled: false,
+        entitlement: async () => ({ active: false, status: 'inactive', reason: 'vip_off' }),
+        creator: async () => null,
+        tiers: async () => [],
+        joinUrl: async () => null,
+    };
+    const ctx = { db, config, now, log, outbox, billing, adapters, valkey, indexnow, vip: vip || noVip, MONEY };
 
     const runHook = (h) => { Promise.resolve().then(h).catch((e) => log.warn('[Tips] after-commit:', e.message)); };
     ctx.tx = async (fn, opts = {}) => {
@@ -66,6 +76,7 @@ function createDomain({ db, config, outbox, billing, adapters, valkey = null, no
     ctx.interactions = createInteractions(ctx);
     ctx.effects = createEffects(ctx);
     ctx.moderation = createModeration(ctx);
+    ctx.posts = createPosts(ctx);
     return ctx;
 }
 
