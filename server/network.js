@@ -11,7 +11,6 @@
  */
 const contracts = require('openvibe-contracts');
 const { createNetworkKeys, verifyUserToken, verifyServiceToken } = require('openvibe-sdk/auth');
-const { OpenVibeAuthClient } = require('openvibe-shared/auth-client');
 
 /** keys.verifyOptions (spread into the verifiers), keys.loaded(), keys.start(), keys.stop(), keys.refresh(). */
 function createKeyProvider(config, { fetchImpl = globalThis.fetch, log = console } = {}) {
@@ -24,18 +23,10 @@ async function verifyService(config, keys, token) {
 }
 
 /**
- * The OAuth client of the browser session layer plus offline verification of the Network user
- * JWT (RS256, issuer = the Network's public URL).
+ * Offline verification of the Network user JWT (RS256, issuer = the Network's public URL). The OAuth half
+ * is openvibe-sdk/sso's (server/web/session.js).
  */
 function createUserAuth(config, keys) {
-    const client = new OpenVibeAuthClient({
-        clientId: config.oauth.clientId,
-        clientSecret: config.oauth.clientSecret,
-        redirectUri: config.oauth.redirectUri,
-        publicKey: null,
-        authBase: config.network.url,
-        internalBase: config.network.internalUrl,
-    });
     /**
      * Claims of a valid user token, or null. openvibe-sdk/auth refuses service, app and mod principals and typed
      * tokens (a realtime ticket, an export token): none of them is a session.
@@ -44,7 +35,7 @@ function createUserAuth(config, keys) {
         if (!token) return null;
         try { return await verifyUserToken(token, { ...keys.verifyOptions, issuer: config.network.issuer }); } catch { return null; }
     }
-    return { client, verify };
+    return { verify };
 }
 
 module.exports = { createKeyProvider, createUserAuth, verifyService };
