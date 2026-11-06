@@ -142,5 +142,12 @@ const { boot, check, done } = require('./helpers/app');
         assert.strictEqual(call.assertion, a, 'the assertion the service brought is the one Billing gets');
     });
 
+    await check('the counters the flag plan waits for are on /metrics', async () => {
+        const m = await fetch(`${t2.base}/metrics`).then((r) => r.text());
+        assert.ok(/tips_subject_assertion_calls\{state="asserted"\}/.test(m), 'the calls that carried an assertion are counted');
+        assert.ok(/tips_subject_assertion_calls\{state="unasserted"\}/.test(m), 'the calls that came without one are counted');
+        assert.ok(!/usr_[0-9A-Z]{26}/.test(m), 'no subject ever appears in metrics');
+    });
+
     await done();
 })().catch((err) => { console.error(err); process.exit(1); });

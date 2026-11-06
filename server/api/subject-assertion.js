@@ -29,7 +29,7 @@ const { fail } = require('../util');
 /** The header a money call carries the assertion in. */
 const HEADER = 'x-ov-subject-assertion';
 
-function createSubjectAssertion({ config, log = console }) {
+function createSubjectAssertion({ config, log = console, registry = null }) {
     const audience = config.audience || 'openvibe.tips';
     const base = String((config.network && (config.network.internalUrl || config.network.url)) || '').replace(/\/+$/, '');
     const jwksUrl = `${base}/api/.well-known/jwks`;
@@ -45,6 +45,15 @@ function createSubjectAssertion({ config, log = console }) {
     });
     // What the routes did while the flag was off (and what a dashboard would show).
     const counters = { asserted: 0, unasserted: 0, invalid: 0, refused: 0 };
+    // The number the flag plan waits for: the per-person calls that still come without an assertion.
+    if (registry && typeof registry.gauge === 'function') {
+        registry.gauge({
+            name: 'tips_subject_assertion_calls',
+            help: 'Per-person calls by their subject assertion state (asserted, unasserted, invalid, refused)',
+            labelNames: ['state'],
+            collect: () => Object.entries(counters).map(([state, value]) => ({ labels: { state }, value })),
+        });
+    }
 
     /** True when the old way is refused and an assertion is required. */
     const required = () => Boolean(config.subjectAssertion && config.subjectAssertion.required);
