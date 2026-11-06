@@ -27,6 +27,12 @@ function readBody(req) {
 const send = (res, status, obj) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
 
 async function startNetwork() {
+    // What a service holds for an audience when it asks for no scope (Network issues the token's
+    // capabilities from the principal's grants, so the request's scope is only a narrowing).
+    const DEFAULT_CAPS = {
+        'openvibe.network': ['identity.subject.resolve'],
+        'openvibe.chat': ['chat.message.send chat.event.publish'],
+    };
     const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
     const publicPem = publicKey.export({ type: 'spki', format: 'pem' });
     const privatePem = privateKey.export({ type: 'pkcs8', format: 'pem' });
@@ -87,7 +93,12 @@ async function startNetwork() {
         if (req.url === '/oauth/token' && req.method === 'POST') {
             // The Network takes the token grant as JSON (openvibe-sdk/sso) or as a form (the service clients).
             const body = raw.trim().startsWith('{') ? JSON.parse(raw) : Object.fromEntries(new URLSearchParams(raw));
-            grants.push(body);
+            // A token's capabilities come from the principal's grants for the audience, not from the
+            // request: a client that asks for no scope gets the audience's default grants (Network's
+            // own token endpoint does the same, so a scope-less client is not left with an empty token).
+            const asked = String(body.scope || '').split(/\s+/).filter(Boolean);
+            const cap = asked.length ? asked : (DEFAULT_CAPS[String(body.audience || '')] || []);
+            grants.push({ ...body, scope: cap.join(' ') || body.scope });
             if (body.client_secret !== 'shh') return send(res, 401, { error: 'invalid_client' });
             // A sign-in's code: the Network answers invalid_grant for a code it never issued.
             if (body.grant_type === 'authorization_code') {
@@ -96,13 +107,12 @@ async function startNetwork() {
                 codes.delete(String(body.code));
                 return send(res, 200, { access_token: c.access_token, refresh_token: c.refresh_token || null, token_type: 'Bearer', expires_in: 300 });
             }
-            const cap = String(body.scope || '').split(/\s+/).filter(Boolean);
             return send(res, 200, { access_token: signService({ sub: `svc:${body.client_id}`, aud: [body.audience], cap }), token_type: 'Bearer', expires_in: 300 });
         }
         if (req.url === '/internal/subject-assertions' && req.method === 'POST') {
             // The mint route (ADR-003, the 2026-11-06 amendment): a first-party service hands over the
             // person's own token and gets back a 60-second assertion naming the person.
-            const v = serviceAuth.verifyServiceToken(String(req.headers.authorization || '').slice(7), { publicKey: publicPem, issuer });
+            const v = serviceAuth.verifyServiceToken(String(req.headers.authorization || '').slice(7), { publicKey: publicPem, issuer, audience: 'openvibe.network' });
             if (!v.ok) return send(res, 401, { code: v.code });
             if (!/^svc:[a-z][a-z0-9-]{1,39}$/.test(String(v.claims.sub || ''))) return send(res, 403, { code: 'assertion.not_a_service' });
             const body = JSON.parse(raw || '{}');
