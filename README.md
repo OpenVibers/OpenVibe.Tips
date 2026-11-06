@@ -48,6 +48,10 @@ from *interaction delivered*.
   (openvibe-sdk transactional outbox)
 - **OpenVibe.Network** — SSO for people, service tokens, JWKS, identity resolve (a creator's Chat room)
 - **OpenVibe.Chat** — chat delivery through its typed ingress (`/internal/chat/messages`, `/internal/chat/events`)
+- **OpenVibe.VIP** — the gate of the members-only posts: `POST /api/v1/entitlements/check`
+  (`vip.entitlement.check`, the entitlement answer for member → creator; Billing holds the truth) and the creator's
+  public VIP page (`GET /api/v1/creators/<subject>`: their tiers and the plan a join button points at). Without the
+  Network grant `tips vip.entitlement.check openvibe.vip` every answer is a denial: no post text, no tiers, no join link
 - **OpenVibe.Live** — overlay consumer; its public stream list (`GET <LIVE_URL>/api/streams`) feeds the home's "Live on
   OpenVibe now" ([server/clients/live-now.js](server/clients/live-now.js): once a minute, 2 s timeout, never Live's AI
   text, nothing when Live does not answer; `TIPS_LIVE_NOW=on|off`, off in tests by default)
@@ -62,7 +66,8 @@ from *interaction delivered*.
 Implemented here (the service manifest's `capabilities`, 19 `tips.*` ids, audience `openvibe.tips`):
 `tips.profile.get|update`, `tips.checkout.create`, `tips.superchat.create`, `tips.tts.request`,
 `tips.media_request.create`, `tips.sound.request`, `tips.interaction.get|list|record|moderate`, `tips.goal.create|update|close`,
-`tips.overlay.token.create|revoke`, `tips.overlay.config.get|update` and `tips.simulation.run`.
+`tips.overlay.token.create|revoke`, `tips.overlay.config.get|update`, `tips.post.list|create|moderate` and
+`tips.simulation.run`.
 
 Called elsewhere, as the service principal `tips`:
 
@@ -73,6 +78,7 @@ Called elsewhere, as the service principal `tips`:
 | OpenVibe.Network | `network.account.export.contribute`, `network.account.deletion.confirm` (granted last, once this release is live) | account export and deletion (ADR-033) |
 | OpenVibe.Chat | `chat.message.send`, `chat.event.publish` (only with `TIPS_CHAT_ADAPTER=chat`) | donation lines and TTS through `/internal/chat/messages`, the alert through `/internal/chat/events` |
 | OpenVibe.Network | `identity.subject.resolve` (only with `TIPS_CHAT_ADAPTER=chat`) | the creator's Live user id (Chat's room) from `/internal/identity/resolve` |
+| OpenVibe.VIP | `vip.entitlement.check` | the entitlement answer that opens a members-only post |
 
 ## Run it
 
@@ -340,6 +346,25 @@ for an anonymous supporter, `amount: null` and a line without the amount when it
 message. `test` records jobs in memory (development; simulations always use it). `none` (the default) creates
 no chat effects. Production runs `chat` since the launch (2026-10-17): the `tips` principal holds the three
 capabilities above (`TIPS_CHAT_URL` only when Chat is not on `127.0.0.1:4400`).
+
+## Members-only posts
+
+A creator writes posts for the members of their OpenVibe.VIP tiers (the Billing tiers of their published VIP
+plans). The title and the tiers are public; the text is served only to a member of a tier that reads it.
+
+- **The gate is server-side.** The body never leaves the server for anyone else: not in the page, not in JSON-LD,
+  not in `/llms-full.txt`, not in the sitemap, not in a preview, and not in the API list
+  ([server/domain/posts.js](server/domain/posts.js), [server/vip/client.js](server/vip/client.js)). The check is
+  OpenVibe.VIP's entitlement answer for member → creator (Billing holds the truth, ADR-012), behind the shared
+  product cache (`openvibe-sdk/vip`): a "yes" lives at most `TIPS_VIP_CACHE_TTL_MS`, a failure is a denial.
+- **Everyone else gets a card that says so**: "Members only", the tiers it is written for and a "Become a member"
+  button pointing at the creator's VIP plan. A tier nobody can join yet shows no button — a button that leads
+  nowhere is worse than none.
+- **The creator** writes and hides their posts in the dashboard (`/dashboard`, `POST /dashboard/posts`) and always
+  reads their own text. A hidden post is not served at all (neither its title nor its text).
+- **The API**: `GET /api/v1/profiles/:creator/posts`, `GET /api/v1/profiles/:creator/posts/:id`,
+  `GET /api/v1/profiles/:creator/posts/:id/body` (403 `tips.member_only` for anyone else),
+  `POST /api/v1/profiles/:creator/posts`, `POST /api/v1/posts/:id/hide|unhide`.
 
 ## Pages (server-rendered, useful without JavaScript)
 

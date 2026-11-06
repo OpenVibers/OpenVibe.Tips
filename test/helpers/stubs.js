@@ -259,4 +259,53 @@ async function startChat(network) {
     return { url, messages, events, calls, state, close: () => new Promise((r) => server.close(r)) };
 }
 
-module.exports = { startNetwork, startBilling, startEvents, startChat };
+module.exports = { startNetwork, startBilling, startEvents, startChat, startVip };
+
+/**
+ * OpenVibe.VIP as Tips sees it: POST /api/v1/entitlements/check (the membership answer for a pair)
+ * and GET /api/v1/creators/:ref (the creator's page and their plans). The caller presents the service
+ * token the Network issues for the client `tips` (audience openvibe.vip, capability
+ * vip.entitlement.check); without that capability the answers are refused, as VIP refuses them.
+ */
+async function startVip() {
+    const state = { answers: new Map(), creators: new Map(), calls: [], creatorCalls: [], down: false };
+    const server = http.createServer((req, res) => {
+        let raw = '';
+        req.on('data', (c) => { raw += c; });
+        req.on('end', () => {
+            if (state.down) { req.socket.destroy(); return; }
+            const send = (status, body) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)); };
+            const claims = claimsOf(req.headers.authorization);
+            if (!claims) return send(401, { code: 'token.missing' });
+            if (!(claims.aud || []).includes('openvibe.vip')) return send(401, { code: 'token.invalid' });
+            if (!(claims.cap || []).includes('vip.entitlement.check')) return send(403, { code: 'capability.denied' });
+            if (req.url.startsWith('/api/v1/entitlements/check') && req.method === 'POST') {
+                const b = JSON.parse(raw || '{}');
+                state.calls.push(b);
+                const answer = state.answers.get(b.subject + '|' + b.creator);
+                return send(200, {
+                    member: { type: 'user', id: b.subject }, creator: { type: 'user', id: b.creator },
+                    ...(answer || { status: 'inactive', active: false, expires_at: null, membership: null }),
+                });
+            }
+            if (req.url.startsWith('/api/v1/creators/') && req.method === 'GET') {
+                const ref = decodeURIComponent(req.url.slice('/api/v1/creators/'.length).split('?')[0]);
+                state.creatorCalls.push(ref);
+                const c = state.creators.get(ref);
+                if (!c) return send(404, { code: 'vip.creator_not_found' });
+                return send(200, { creator: { username: c.username }, plans: c.plans || [] });
+            }
+            return send(404, { code: 'not_found' });
+        });
+    });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    return { state, server, url: 'http://127.0.0.1:' + server.address().port, close: () => new Promise((r) => server.close(r)) };
+}
+
+/** The claims of a service token (its signature is the Network's business; the capability is ours). */
+function claimsOf(header) {
+    const raw = String(header || '').replace(/^Bearer /i, '');
+    const part = raw.split('.')[1];
+    if (!part) return null;
+    try { return JSON.parse(Buffer.from(part, 'base64url').toString('utf8')); } catch { return null; }
+}

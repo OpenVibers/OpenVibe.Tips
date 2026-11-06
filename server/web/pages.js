@@ -220,7 +220,61 @@ function supportLinksSection(profile) {
 </section>`;
 }
 
-function creatorPage({ profile, goals, viewer, csrf, idem, values, providers, error, ownerPreview, sounds = [] }) {
+/**
+ * The creator page's members-only posts. The title and the tier are public; the text is only ever
+ * rendered for a member of a tier the post is written for (the route decides that, after the
+ * entitlement check). Everyone else gets a card that says so, and a way to join when a tier that
+ * reads the post can be joined.
+ */
+function postsSection(posts) {
+    if (!posts || !posts.length) return '';
+    const items = posts.map((p) => {
+        const tiers = p.tiers.length ? p.tiers.map((t) => 'Tier ' + t).join(', ') : 'a tier';
+        const meta = '<p class="muted small">' + esc(tiers) + (p.published_at ? ' · ' + when(p.published_at) : '') + '</p>';
+        const body = p.unlocked
+            ? '<div class="post-body">' + p.body_html + '</div>'
+            : '<div class="post-locked"><p><b>Members only</b></p>'
+                + '<p class="muted">This post is for the members of ' + esc(tiers)
+                + (p.join_url ? '.' : ', and no tier that reads it can be joined yet.') + '</p>'
+                + (p.join_url ? '<p><a class="btn" href="' + esc(p.join_url) + '">Become a member</a></p>' : '')
+                + '</div>';
+        return '<article class="card post"><h3>' + esc(p.title) + '</h3>' + meta + body + '</article>';
+    }).join('');
+    return '<section class="posts" aria-labelledby="posts-h"><h2 id="posts-h">Members-only posts</h2>'
+        + '<p class="muted small">Posts for the members of a tier. The title is public; the text is not.</p>'
+        + '<div class="post-list">' + items + '</div></section>';
+}
+
+/**
+ * The dashboard's members-only posts: the composer (the tiers the creator sells on OpenVibe.VIP) and
+ * the creator's own posts with the text they wrote.
+ */
+function postsAdmin({ posts = [], tiers = [], csrf, idem }) {
+    const composer = tiers.length
+        ? '<details class="card"><summary>New members-only post</summary>'
+            + '<form method="post" action="/dashboard/posts">' + hidden({ csrf, idem: idem + '-post' })
+            + '<label>Title <input name="title" maxlength="140" required></label>'
+            + '<label>Text (Markdown) <textarea name="body" rows="6" required></textarea></label>'
+            + '<fieldset><legend>Who reads it</legend>'
+            + tiers.map((t) => '<label><input type="checkbox" name="tiers" value="' + esc(t) + '"> Tier ' + esc(t) + '</label>').join('')
+            + '</fieldset>'
+            + '<p class="muted small">A member of a higher tier reads posts written for a lower tier too. The text is only ever sent to members.</p>'
+            + '<button class="btn" type="submit">Publish post</button></form></details>'
+        : '<p class="muted small">Publish a plan on <a href="https://openvibe.vip">OpenVibe.VIP</a> first: a post is written for the members of one of your tiers.</p>';
+    const mine = posts.length ? posts.map((p) => '<article class="card post"><h3>' + esc(p.title) + '</h3>'
+        + '<p class="muted small">' + esc(p.tiers.map((t) => 'Tier ' + t).join(', ')) + ' · ' + when(p.published_at)
+        + ' · <span class="pill">' + esc(p.status) + '</span></p>'
+        + '<div class="post-body">' + p.body_html + '</div>'
+        + '<form class="inline" method="post" action="/dashboard/posts/' + esc(p.id) + '/' + (p.status === 'hidden' ? 'unhide' : 'hide') + '">'
+        + hidden({ csrf, idem: idem + '-post-' + p.id })
+        + '<button class="btn ghost" type="submit">' + (p.status === 'hidden' ? 'Show again' : 'Hide') + '</button></form>'
+        + '</article>').join('') : '<p class="muted small">No posts yet.</p>';
+    return '<section class="card"><h2>Members-only posts</h2>'
+        + '<p class="muted small">A post is written for the members of one or more of your tiers. Only a member of that tier reads the text; everyone else sees the title and a way to join.</p>'
+        + composer + mine + '</section>';
+}
+
+function creatorPage({ profile, goals, viewer, csrf, idem, values, providers, error, ownerPreview, sounds = [], posts = [] }) {
     const active = goals.filter((g) => g.status === 'active');
     return `${ownerPreview ? '<p class="notice">Your page is switched off: only you can see it, and search engines are told not to index it. Switch it on in the <a href="/dashboard">dashboard</a>.</p>' : ''}
 <section class="creator-head">
@@ -229,6 +283,7 @@ function creatorPage({ profile, goals, viewer, csrf, idem, values, providers, er
   <p class="links"><a href="https://openvibe.live/@${esc(profile.handle)}">Watch on OpenVibe.Live</a> · <a href="/${esc(profile.handle)}/goals">Goals</a>${profile.page.supporters_page ? ` · <a href="/${esc(profile.handle)}/supporters">Supporters</a>` : ''}</p></div>
 </section>
 ${active.length ? `<section><h2>Goals</h2>${active.map(goalCard).join('')}</section>` : ''}
+${postsSection(posts)}
 ${tipForm({ profile, goals, viewer, csrf, idem, values, providers, error, sounds })}
 ${supportLinksSection(profile)}`;
 }
@@ -342,7 +397,7 @@ function supportLinksCard({ profile: p, csrf, idem }) {
 </section>`;
 }
 
-function dashboard({ profile, goals, tokens, configs, totals, recent, deliveries, csrf, idem, flash, error, connected, chatAdapter, mod = {}, sounds = [] }) {
+function dashboard({ profile, goals, tokens, configs, totals, recent, deliveries, csrf, idem, flash, error, connected, chatAdapter, mod = {}, sounds = [], posts = [], postTiers = [] }) {
     const p = profile;
     const f = (k) => (p[k] ? ' checked' : '');
     const alertCfg = configs.find((c) => c.kind === 'alerts');
@@ -385,6 +440,7 @@ ${flash ? `<p class="notice">${esc(flash)}</p>` : ''}${errorBox(error)}
     </form>
   </div>
 </section>
+${postsAdmin({ posts, tiers: postTiers, csrf, idem })}
 ${soundsCard({ profile: p, sounds, csrf, idem })}
 ${supportLinksCard({ profile: p, csrf, idem })}
 <section class="card"><h2>Goals</h2>

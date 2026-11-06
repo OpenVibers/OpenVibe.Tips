@@ -27,6 +27,7 @@ const { loadConfig } = require('./config');
 const { openDb } = require('./db');
 const { createKeyProvider, createUserAuth } = require('./network');
 const { createBillingClient } = require('./billing-client');
+const { createVip } = require('./vip/client');
 const { createAdapters } = require('./delivery');
 const { createTipsOutbox } = require('./events/outbox');
 const { consumerRouter } = require('./events/consumer');
@@ -57,12 +58,15 @@ function createApp(opts = {}) {
     const userAuth = createUserAuth(config, keys);
     const billing = opts.billing || createBillingClient(config, { fetchImpl });
     const adapters = opts.adapters || createAdapters(config, { fetchImpl });
+    // OpenVibe.VIP: the gate of the members-only posts (server/vip/client.js). Fails closed without a
+    // client secret or without the Network grant "tips vip.entitlement.check openvibe.vip".
+    const vip = opts.vip || createVip(config, { fetchImpl, now, log });
     const outbox = opts.outbox || createTipsOutbox({ db, config, fetchImpl: opts.eventsFetch, now, log });
     // IndexNow (openvibe-shared/indexnow): created once at boot from INDEXNOW_KEY; unset → off (nothing
     // mounted, nothing sent). The key file is served at /<key>.txt and the profile change pings the
     // engines when a creator's public page appears, changes or goes away.
     const indexnow = opts.indexnow || createIndexNow({ host: config.baseUrl, key: config.indexnow.key, ...(fetchImpl ? { fetch: fetchImpl } : {}), log });
-    const domain = createDomain({ db, config, outbox, billing, adapters, valkey, now, log, indexnow });
+    const domain = createDomain({ db, config, outbox, billing, adapters, valkey, now, log, indexnow, vip });
     const apiAuth = createApiAuth({ config, keys, userAuth });
     const release = require('openvibe-shared/release').createRelease({ service: 'tips', root: path.join(__dirname, '..') });
     require('./web/layout').setRelease(release.release);
@@ -194,7 +198,7 @@ function createApp(opts = {}) {
         return res.status(500).type('html').send(layout.page({ title: 'Error', robots: 'noindex', body: pages.errorPage({ status: 500, title: 'Something went wrong', message: 'This one is on us. Please try again.' }) }));
     });
 
-    Object.assign(app.locals, { config, db, valkey, domain, keys, outbox, adapters, billing, consumer, metrics, indexnow, accountData });
+    Object.assign(app.locals, { config, db, valkey, domain, keys, outbox, adapters, billing, vip, consumer, metrics, indexnow, accountData });
     return app;
 }
 
