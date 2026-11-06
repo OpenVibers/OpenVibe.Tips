@@ -30,6 +30,9 @@ async function startNetwork() {
     const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
     const publicPem = publicKey.export({ type: 'spki', format: 'pem' });
     const privatePem = privateKey.export({ type: 'pkcs8', format: 'pem' });
+    // The subject-assertion key (ES256): Network publishes it beside the RS256 key, and the stub
+    // signs assertions with it so a test can play the caller that carries one.
+    const assertionKeys = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
     const grants = [];
     // The sign-in codes Network issued (openvibe-sdk/sso exchanges one with the PKCE verifier): code → tokens.
     const codes = new Map();
@@ -38,6 +41,20 @@ async function startNetwork() {
     let issuer = 'http://network.test';
     let n = 100;
 
+    const b64url = (b) => Buffer.from(b).toString('base64url');
+    /** A subject assertion, as Network signs it: the person, the audience(s), the services that may carry it. */
+    function signAssertion({ subject, audience = 'openvibe.tips', act = 'svc:live', for: forServices, expSec = 60, kid = 'ov-network-assertion-1', jti } = {}) {
+        const now = Math.floor(Date.now() / 1000);
+        const aud = Array.isArray(audience) ? audience : [audience];
+        const header = b64url(JSON.stringify({ alg: 'ES256', typ: 'JWT', kid }));
+        const body = b64url(JSON.stringify({
+            iss: issuer, sub: subject, aud, act,
+            ...(forServices ? { for: forServices } : {}),
+            jti: jti || `as_${crypto.randomBytes(8).toString('hex')}`, iat: now, exp: now + expSec,
+        }));
+        const sig = crypto.sign('sha256', Buffer.from(`${header}.${body}`), { key: assertionKeys.privateKey, dsaEncoding: 'ieee-p1363' });
+        return `${header}.${body}.${b64url(sig)}`;
+    }
     function signService({ sub = 'svc:live', aud = ['openvibe.tips'], cap = [], expSec = 300 } = {}) {
         const now = Math.floor(Date.now() / 1000);
         return serviceAuth.signServiceToken({ iss: issuer, sub, actor_type: 'service', aud, cap, iat: now, exp: now + expSec, jti: crypto.randomBytes(8).toString('hex') }, privatePem);
@@ -55,7 +72,18 @@ async function startNetwork() {
 
     const server = http.createServer(async (req, res) => {
         const raw = await readBody(req);
-        if (req.url === '/api/.well-known/jwks') return send(res, 200, { public_key: publicPem, algorithm: 'RS256' });
+        if (req.url === '/api/.well-known/jwks') {
+            // Both keys, as Network publishes them: the RS256 session key and the ES256 assertion key.
+            const rsa = publicKey.export({ format: 'jwk' });
+            const ec = assertionKeys.publicKey.export({ format: 'jwk' });
+            return send(res, 200, {
+                public_key: publicPem, algorithm: 'RS256',
+                keys: [
+                    { ...rsa, use: 'sig', alg: 'RS256', kid: 'ov-network-1' },
+                    { ...ec, use: 'sig', alg: 'ES256', kid: 'ov-network-assertion-1' },
+                ],
+            });
+        }
         if (req.url === '/oauth/token' && req.method === 'POST') {
             // The Network takes the token grant as JSON (openvibe-sdk/sso) or as a form (the service clients).
             const body = raw.trim().startsWith('{') ? JSON.parse(raw) : Object.fromEntries(new URLSearchParams(raw));
@@ -70,6 +98,24 @@ async function startNetwork() {
             }
             const cap = String(body.scope || '').split(/\s+/).filter(Boolean);
             return send(res, 200, { access_token: signService({ sub: `svc:${body.client_id}`, aud: [body.audience], cap }), token_type: 'Bearer', expires_in: 300 });
+        }
+        if (req.url === '/internal/subject-assertions' && req.method === 'POST') {
+            // The mint route (ADR-003, the 2026-11-06 amendment): a first-party service hands over the
+            // person's own token and gets back a 60-second assertion naming the person.
+            const v = serviceAuth.verifyServiceToken(String(req.headers.authorization || '').slice(7), { publicKey: publicPem, issuer });
+            if (!v.ok) return send(res, 401, { code: v.code });
+            if (!/^svc:[a-z][a-z0-9-]{1,39}$/.test(String(v.claims.sub || ''))) return send(res, 403, { code: 'assertion.not_a_service' });
+            const body = JSON.parse(raw || '{}');
+            if (!body.user_token) return send(res, 401, { code: 'assertion.no_user_token' });
+            let claims;
+            try { claims = jwt.verify(String(body.user_token), publicPem, { issuer }); } catch { return send(res, 401, { code: 'assertion.invalid_user_token' }); }
+            const subject = claims.subject_id;
+            if (body.subject && body.subject !== subject) return send(res, 403, { code: 'assertion.subject_mismatch' });
+            const audience = Array.isArray(body.audience) ? body.audience : [body.audience];
+            const forServices = [...new Set([v.claims.sub, ...(Array.isArray(body.for) ? body.for : [])])];
+            const jti = `as_${crypto.randomBytes(8).toString('hex')}`;
+            const assertion = signAssertion({ subject, audience, act: v.claims.sub, for: forServices, jti });
+            return send(res, 200, { assertion, subject, audience: body.audience, act: v.claims.sub, for: forServices, jti, expires_in: 60 });
         }
         if (req.url.startsWith('/internal/identity/resolve?') && req.method === 'GET') {
             const v = serviceAuth.verifyServiceToken(String(req.headers.authorization || '').slice(7), { publicKey: publicPem, issuer, audience: 'openvibe.network' });
@@ -103,7 +149,7 @@ async function startNetwork() {
         codes.set(code, { access_token: access_token || signUser({ subject: 'usr_test', username: 'someone' }), refresh_token });
         return code;
     }
-    return { url, publicPem, signService, signUser, newUser, legacy, grants, resolves, issueCode, close: () => new Promise((r) => server.close(r)) };
+    return { url, publicPem, signService, signUser, signAssertion, newUser, legacy, grants, resolves, issueCode, close: () => new Promise((r) => server.close(r)) };
 }
 
 /** Billing as Tips sees it. */
@@ -158,7 +204,7 @@ async function startBilling(network) {
         const raw = await readBody(req);
         if (req.url === '/api/health') return send(res, state.down ? 503 : 200, state.down ? { code: 'billing.unavailable' } : { ok: true, service: 'billing' });
         const body = raw ? JSON.parse(raw) : {};
-        calls.push({ method: req.method, url: req.url, body, key: req.headers['idempotency-key'] || null });
+        calls.push({ method: req.method, url: req.url, body, key: req.headers['idempotency-key'] || null, assertion: req.headers['x-ov-subject-assertion'] || null });
         if (state.down) return send(res, 503, { code: 'billing.unavailable' });
         const v = serviceAuth.verifyServiceToken(String(req.headers.authorization || '').slice(7), { publicKey: network.publicPem, issuer: network.url, audience: 'openvibe.billing' });
         if (!v.ok) return send(res, 401, { code: v.code });

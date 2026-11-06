@@ -18,6 +18,13 @@
  */
 const { createCommerceClient, CommerceError: BillingCallError } = require('openvibe-sdk/commerce');
 
+/**
+ * The person's own subject assertion (ADR-003, the 2026-11-06 amendment; plan H1), when the call
+ * carries one: Billing checks it against the person the money is for. The assertion travels with the
+ * tip: the site vouched for the person, Tips carries it on to Billing.
+ */
+const assertionHeader = (assertion) => (assertion ? { headers: { 'X-OV-Subject-Assertion': String(assertion) } } : {});
+
 // One token for every call, as before: every logical capability maps to the same scope, so
 // commerce creates (or takes) a single token client.
 const SCOPE = 'billing.intent.create billing.transfer.create';
@@ -27,11 +34,11 @@ function createBillingClient(config, { fetchImpl = globalThis.fetch, tokenClient
     const commerce = createCommerceClient(config, { caps: CAPS, fetchImpl, tokenClients: tokenClient ? { [SCOPE]: tokenClient } : null });
     return {
         /** { intent, checkout_url } — kind purchase: the supporter buys `bits` of credit. */
-        createIntent: async ({ provider, subject, bits, successUrl, cancelUrl, key, traceparent }) =>
-            await commerce.createIntent({ provider, kind: 'purchase', subject, bits, successUrl, cancelUrl, key, traceparent }),
+        createIntent: async ({ provider, subject, bits, successUrl, cancelUrl, key, traceparent, assertion }) =>
+            await commerce.createIntent({ provider, kind: 'purchase', subject, bits, successUrl, cancelUrl, key, traceparent, ...assertionHeader(assertion) }),
         /** { transaction } — credit of `from` → payable of `to`, tagged with the interaction. */
-        createTransfer: async ({ from, to, amount, kind, target, message, key, traceparent }) =>
-            await commerce.createTransfer({ from, to, amount, kind, target, message, key, traceparent }),
+        createTransfer: async ({ from, to, amount, kind, target, message, key, traceparent, assertion }) =>
+            await commerce.createTransfer({ from, to, amount, kind, target, message, key, traceparent, ...assertionHeader(assertion) }),
         refundTransfer: async ({ txnId, amount, reason, key }) => await commerce.refundTransfer({ txnId, amount, reason, key }),
         rates: async () => await commerce.rates(),
     };

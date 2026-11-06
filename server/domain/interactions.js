@@ -209,12 +209,12 @@ function createInteractions(ctx) {
     const transferKind = (i) => (i.kind === 'tip' ? 'tip' : 'paid_interaction');
 
     /** Try the Billing transfer now; retryable failures leave it due for the jobs loop. */
-    async function transfer(i, { traceparent } = {}) {
+    async function transfer(i, { traceparent, assertion } = {}) {
         try {
             const out = await ctx.billing.createTransfer({
                 from: i.supporter_subject, to: i.creator_subject, amount: i.amount, kind: transferKind(i),
                 target: { service: 'tips', type: 'interaction', id: i.id }, message: i.message || undefined,
-                key: `tips:transfer:${i.id}`, traceparent,
+                key: `tips:transfer:${i.id}`, traceparent, assertion,
             });
             const txn = out.transaction;
             await ctx.tx(async (t) => await settleByTransaction(t, await lock(t, i.id), { id: txn.id, test: !!txn.test }), MONEY);
@@ -234,7 +234,7 @@ function createInteractions(ctx) {
         }
     }
 
-    async function startCheckout(i, { provider, traceparent }) {
+    async function startCheckout(i, { provider, traceparent, assertion }) {
         const p = String(provider || config.billing.providers[0] || '').toLowerCase();
         if (!config.billing.providers.includes(p)) fail(422, 'tips.invalid_input', `provider must be one of ${config.billing.providers.join(', ') || '(none configured)'}`);
         let out;
@@ -242,7 +242,7 @@ function createInteractions(ctx) {
             out = await ctx.billing.createIntent({
                 provider: p, subject: i.supporter_subject, bits: i.amount,
                 successUrl: `${config.baseUrl}/receipts/${i.id}`, cancelUrl: `${config.baseUrl}/receipts/${i.id}?cancelled=1`,
-                key: `tips:intent:${i.id}`, traceparent,
+                key: `tips:intent:${i.id}`, traceparent, assertion,
             });
         } catch (e) {
             if (e instanceof BillingCallError && !e.retryable) {
