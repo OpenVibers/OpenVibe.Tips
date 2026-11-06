@@ -2,7 +2,9 @@
 'use strict';
 /**
  * Create Tips' OpenVibe.Events subscriptions for Billing's events: settlements (billing.transaction.*)
- * and EXTERNAL receipts (billing.receipt.*, tips on a creator's own PowerChat).
+ * and EXTERNAL receipts (billing.receipt.*, tips on a creator's own PowerChat), and for OpenVibe.VIP's
+ * membership changes (vip.membership.changed: a membership that ended drops the cached entitlement at
+ * once, so a cancelled member loses access without waiting for the cache).
  *
  *   node scripts/subscribe.js [--endpoint http://127.0.0.1:4610/internal/events] [--pattern 'billing.transaction.*']
  *
@@ -24,7 +26,7 @@ const opt = (name, d) => { const i = args.indexOf(`--${name}`); return i >= 0 ? 
 (async () => {
     const config = loadConfig();
     const endpoint = opt('endpoint', `http://127.0.0.1:${config.port}/internal/events`);
-    const patterns = opt('pattern') ? [opt('pattern')] : ['billing.transaction.*', 'billing.receipt.*'];
+    const patterns = opt('pattern') ? [opt('pattern')] : ['billing.transaction.*', 'billing.receipt.*', 'vip.membership.changed'];
     const secret = config.events.webhookSecrets[0];
     if (!config.events.url) throw new Error('EVENTS_URL is not set');
     if (!secret || secret.length < 32) throw new Error('TIPS_EVENTS_SECRET must be set (32+ characters) before subscribing');

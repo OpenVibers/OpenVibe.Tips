@@ -1,0 +1,19 @@
+{
+  "id": "tips.post.create",
+  "version": "1.0",
+  "owner": "tips",
+  "status": "active",
+  "visibility": "first-party",
+  "description": "Write a members-only post for a creator: the title, the Markdown text and the tiers that read it.",
+  "permissions": [
+    "tips:posts"
+  ],
+  "resourceConstraints": [
+    "owner"
+  ],
+  "quotaClass": "standard",
+  "events": [],
+  "implementedBy": [
+    "POST /api/v1/profiles/:creator/posts"
+  ]
+}

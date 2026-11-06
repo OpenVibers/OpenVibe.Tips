@@ -59,7 +59,17 @@ function createWebRoutes({ domain, config, layout, userAuth, liveNow = { list: a
     const form = express.urlencoded({ extended: false, limit: '32kb' });
     const secret = config.formSecret || crypto.randomBytes(32).toString('hex');
 
-    const html = (res, body, status = 200, extraHeaders = {}) => res.status(status).set({ 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache', ...extraHeaders }).send(body);
+    // Every page here is rendered for one viewer: the footer shows who is signed in, and a member's
+    // creator page carries the text of the posts they may read. A shared cache stores by URL and
+    // ignores Vary, Cookie and Authorization (the 10-15 Media leak), so every HTML answer is
+    // private and says it varies by cookie. The machine-readable pages (robots.txt, sitemap.xml,
+    // llms.txt, llms-full.txt) and the agent twins carry no viewer's state and stay public.
+    const html = (res, body, status = 200, extraHeaders = {}) => res.status(status).set({
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'private, no-cache',
+        Vary: 'Cookie',
+        ...extraHeaders,
+    }).send(body);
     const pageFor = (req, o) => {
         // A public page names its Markdown twin in the Link header, exactly as the agent layer's own
         // responses do; a page rendered for a signed-in person (noindex) has no twin and no header.
@@ -236,12 +246,14 @@ function createWebRoutes({ domain, config, layout, userAuth, liveNow = { list: a
             configs = await overlays.listConfigs(db, p.creator_subject);
         }
         const s = p.creator_subject;
-        const [recentRows, goalRows, tokens, totals, deliveries, connected, held, moderators, invites, log, moderating, soundList] = await Promise.all([
+        const [recentRows, goalRows, tokens, totals, deliveries, connected, held, moderators, invites, log, moderating, soundList, postRows, postTiers] = await Promise.all([
             interactions.list(db, { creator: s, limit: 20 }).then((out) => interactions.presentMany(db, out.rows, { viewer: 'owner' })),
             goals.list(db, s).then((list) => goals.presentMany(db, list)),
             overlays.listTokens(db, s), interactions.totals(db, s), overlays.recentDeliveries(db, s, 20), overlays.connected(s),
             moderation.heldCount(db, s), moderation.listModerators(db, s), moderation.openInvites(db, s), moderation.log(db, s, 20), moderation.moderatedBy(db, req.viewer.subject),
             sounds.list(db, s),
+            domain.posts.rows({ creatorSubject: s, includeHidden: true }),
+            domain.vip.tiers(s),
         ]);
         html(res, pageFor(req, {
             title: 'Dashboard', active: 'dashboard', robots: 'noindex,nofollow', canonicalPath: '/dashboard',
@@ -252,6 +264,8 @@ function createWebRoutes({ domain, config, layout, userAuth, liveNow = { list: a
                 connected, chatAdapter: config.chat.adapter,
                 mod: { held, moderators: moderators.map(moderation.presentModerator), invites, log, moderating },
                 sounds: soundList,
+                posts: postRows.map((r) => ({ id: r.id, title: r.title, tiers: domain.posts.tiersOf(r), status: r.status, published_at: r.published_at, body_html: r.body_html })),
+                postTiers,
             }),
         }), status);
     }
@@ -318,6 +332,21 @@ function createWebRoutes({ domain, config, layout, userAuth, liveNow = { list: a
     };
     action('/dashboard/goals/:id', async (req, p) => { await goals.update(await ownGoal(req, p), { title: req.body.title, target_amount: req.body.target_amount, revision: req.body.revision }); return { done: 'Goal updated' }; });
     action('/dashboard/goals/:id/close', async (req, p) => { await goals.close(await ownGoal(req, p)); return { done: 'Goal closed' }; });
+    // The members-only posts: the creator writes them, hides them and shows them again.
+    action('/dashboard/posts', async (req, p) => {
+        const b = req.body || {};
+        const tiers = [].concat(b.tiers || []).map((t) => Number(t)).filter((n) => Number.isInteger(n) && n >= 1 && n <= 10);
+        await domain.posts.create({ creatorSubject: p.creator_subject, title: b.title, body: b.body, tiers, actor: req.viewer.subject });
+        return { done: 'Post published' };
+    });
+    /** A post of this creator's own (the dashboard is the creator's own posts). */
+    const ownPost = async (req, p) => {
+        const post = await domain.posts.byId(req.params.id);
+        if (!post || post.creator_subject !== p.creator_subject) throw new TipsError(404, 'tips.post_not_found', 'no post ' + req.params.id);
+        return post;
+    };
+    action('/dashboard/posts/:id/hide', async (req, p) => { await domain.posts.hide((await ownPost(req, p)).id, { actor: req.viewer.subject }); return { done: 'Post hidden' }; });
+    action('/dashboard/posts/:id/unhide', async (req, p) => { await domain.posts.unhide((await ownPost(req, p)).id, { actor: req.viewer.subject }); return { done: 'Post shown again' }; });
     action('/dashboard/overlay-tokens', async (req, p) => {
         const scopes = [bool(req.body.scope_alerts) && 'alerts', bool(req.body.scope_goals) && 'goals'].filter(Boolean);
         const alertCfg = (await overlays.listConfigs(db, p.creator_subject)).find((c) => c.kind === 'alerts');
@@ -512,13 +541,18 @@ function createWebRoutes({ domain, config, layout, userAuth, liveNow = { list: a
         if (p.handle !== String(req.params.handle)) return res.redirect(301, `/${p.handle}`);   // @name, Name → the canonical path
         // The page shows what the public sees, for the creator too (a preview); the dashboard has the rest.
         const list = await goals.publicGoals(db, await goals.list(db, p.creator_subject), p);
+        // The members-only posts: the title and the tier are public, the text only for a member of a
+        // tier that reads it (server/domain/posts.js, after the entitlement check).
+        const vipCreator = await domain.vip.creator(p.creator_subject);
+        const posts = await domain.posts.view({ creatorSubject: p.creator_subject, memberSubject: req.viewer ? req.viewer.subject : null, plans: vipCreator ? vipCreator.plans : [], owner });
+        for (const post of posts) post.join_url = post.unlocked ? null : await domain.vip.joinUrl(p.creator_subject, post.tiers);
         const csrf = req.viewer ? csrfFor(req.viewer.subject) : '';
         const jsonLd = p.page_enabled ? [{ '@context': 'https://schema.org', '@type': 'ProfilePage', name: p.display_name, url: `${config.baseUrl}/${p.handle}`, mainEntity: { '@type': 'Person', name: p.display_name, alternateName: p.handle, image: p.avatar_url || undefined } }] : [];
         return html(res, pageFor(req, {
             title: `Support ${p.display_name}`, active: 'creator', canonicalPath: `/${p.handle}`,
             description: p.headline || `Tip ${p.display_name} on OpenVibe.Tips: tips, goals, paid messages${p.tts_enabled ? ', text-to-speech' : ''}${p.media_requests_enabled ? ', media requests' : ''}.`,
             robots: p.page_enabled ? 'index,follow' : 'noindex,nofollow', ogImage: p.avatar_url || undefined, jsonLd,
-            body: pages.creatorPage({ profile: p, goals: list, viewer: req.viewer, csrf, idem: idem(), values, providers, error, ownerPreview: !p.page_enabled, sounds: p.sounds_enabled ? await sounds.list(db, p.creator_subject) : [] }),
+            body: pages.creatorPage({ profile: p, goals: list, viewer: req.viewer, csrf, idem: idem(), values, providers, error, ownerPreview: !p.page_enabled, sounds: p.sounds_enabled ? await sounds.list(db, p.creator_subject) : [], posts }),
         }), status, p.page_enabled ? {} : { 'X-Robots-Tag': 'noindex, nofollow' });
     }
     r.get('/:handle', withViewer, async (req, res, next) => (profiles.normalizeHandle(req.params.handle) ? await creatorView(req, res) : next()));

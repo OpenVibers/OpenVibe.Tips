@@ -34,6 +34,8 @@ const TABLES = [
     { table: 'paid_media_requests', subject: 'creator_subject', file: null, erase: { keep: money } },
     // The creator's paid sounds: listed in the export (each file is at its /sounds/<id> link), deleted on erasure.
     { table: 'creator_sounds', subject: 'creator_subject', file: 'sounds.json', columns: ['id', 'name', 'mime', 'bytes', 'created_at'] },
+    // The creator's members-only posts: their own writing, exported and erased with the rest of their page.
+    { table: 'creator_posts', subject: 'creator_subject', file: 'posts.json', columns: ['id', 'title', 'body', 'tiers', 'status', 'created_at', 'published_at'] },
     { table: 'tip_moderation_log', subject: 'creator_subject', file: null, erase: { keep: 'the creator\'s moderation log, kept for accountability' } },
     { table: 'tip_moderation_log', subject: 'actor', file: null, erase: { keep: 'the moderation log names the moderator, for the creator\'s accountability' }, kind: 'tip_moderation_log' },
 ];

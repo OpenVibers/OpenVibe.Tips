@@ -34,6 +34,11 @@
  * | GET  /moderation?creator=&state=       | tips.interaction.moderate    | the creator and their moderators    |
  * | POST /interactions/:id/hide|restore    | tips.interaction.moderate    | the creator and their moderators    |
  * | GET  /moderation/log?creator=          | tips.interaction.moderate    | owner                               |
+ * | GET  /profiles/:creator/posts           | tips.post.list               | anyone when the page is on; owner   |
+ * | GET  /profiles/:creator/posts/:id       | tips.post.list               | anyone when the page is on; owner   |
+ * | GET  /profiles/:creator/posts/:id/body  | —                            | a member of a tier that reads it    |
+ * | POST /profiles/:creator/posts           | tips.post.create             | owner                               |
+ * | POST /posts/:id/hide, POST …/:id/unhide | tips.post.moderate           | owner                               |
  * | GET|POST /moderators, POST …/:s/remove | tips.profile.update          | owner                               |
  *
  * Paid requests take `privacy: { anonymous, hide_amount, private_message }` (server/domain/privacy.js).
@@ -65,6 +70,9 @@ const CAP = {
     configUpdate: 'tips.overlay.config.update',
     simulate: 'tips.simulation.run',
     moderate: 'tips.interaction.moderate',   // in openvibe-contracts since v0.32.0 (was docs/capabilities-proposal/)
+    postList: 'tips.post.list',               // members-only posts (docs/capabilities-proposal/)
+    postCreate: 'tips.post.create',
+    postModerate: 'tips.post.moderate',
 };
 
 function v1Router({ domain, apiAuth, limits, subjectAssertion }) {
@@ -315,6 +323,80 @@ function v1Router({ domain, apiAuth, limits, subjectAssertion }) {
         return g;
     };
     r.patch('/goals/:id', edit, ...write(async (req, res) => res.json({ goal: await goals.update(await ownGoal(req, CAP.goalUpdate), req.body || {}) })));
+
+    // ── Members-only posts ───────────────────────────────────────────────
+    // The title and the tiers are public; the text is served only to a member of a tier that reads it
+    // (the entitlement check, server/domain/posts.js). A hidden post is not served at all.
+    const postsView = async (req, creator, { owner = false } = {}) => {
+        const info = await domain.vip.creator(creator.creator_subject);
+        const posts = await domain.posts.view({
+            creatorSubject: creator.creator_subject,
+            memberSubject: req.principal.kind === 'user' ? req.principal.subject : null,
+            plans: info ? info.plans : [],
+            owner,
+        });
+        for (const post of posts) post.join_url = post.unlocked ? null : await domain.vip.joinUrl(creator.creator_subject, post.tiers);
+        return posts;
+    };
+    /** One post and whether this reader may read it (a hidden one is not served at all). */
+    const onePost = async (req, creator, id) => {
+        const post = await domain.posts.byId(id);
+        if (!post || post.creator_subject !== creator.creator_subject || post.status !== 'published') fail(404, 'tips.post_not_found', 'no post ' + id);
+        const info = await domain.vip.creator(creator.creator_subject);
+        const owner = req.principal.kind === 'user' && req.principal.subject === creator.creator_subject;
+        const access = owner ? { unlocked: true, tier: null } : await domain.posts.access({
+            post, memberSubject: req.principal.kind === 'user' ? req.principal.subject : null,
+            creatorSubject: creator.creator_subject, plans: info ? info.plans : [],
+        });
+        return { post, access };
+    };
+    /** The creator's posts: the title and the tiers for everyone, the text only for a member. */
+    r.get('/profiles/:creator/posts', wrap(async (req, res) => {
+        const creator = await creatorOf(req, req.params.creator);
+        const who = req.principal;
+        const owner = (who.kind === 'user' && who.subject === creator.creator_subject) || (who.kind === 'service' && apiAuth.granted(who, CAP.postList));
+        if (!creator.page_enabled && !owner) fail(404, 'tips.creator_not_found', 'no tip profile for this creator');
+        res.json({ creator: { type: 'user', id: creator.creator_subject }, posts: await postsView(req, creator, { owner }) });
+    }));
+    r.get('/profiles/:creator/posts/:id', wrap(async (req, res) => {
+        const creator = await creatorOf(req, req.params.creator);
+        const who = req.principal;
+        const owner = (who.kind === 'user' && who.subject === creator.creator_subject) || (who.kind === 'service' && apiAuth.granted(who, CAP.postList));
+        if (!creator.page_enabled && !owner) fail(404, 'tips.creator_not_found', 'no tip profile for this creator');
+        const { post, access } = await onePost(req, creator, req.params.id);
+        res.json({ post: domain.posts.present(post, { unlocked: !!access.unlocked, tier: access.tier || null }) });
+    }));
+    /** The text itself: only for a member of a tier that reads it. */
+    r.get('/profiles/:creator/posts/:id/body', wrap(async (req, res) => {
+        const creator = await creatorOf(req, req.params.creator);
+        const { post, access } = await onePost(req, creator, req.params.id);
+        if (!access.unlocked) fail(403, 'tips.member_only', 'this post is for the members of a tier');
+        res.json({ post: { id: post.id, title: post.title, body: post.body, body_html: post.body_html, tiers: domain.posts.tiersOf(post) } });
+    }));
+    r.post('/profiles/:creator/posts', edit, ...write(async (req, res) => {
+        const b = req.body || {};
+        const creator = await creatorOf(req, b.creator || req.params.creator);
+        allow(req, CAP.postCreate, creator.creator_subject);
+        const actor = req.principal.kind === 'user' ? req.principal.subject : req.principal.sub;
+        const post = await domain.posts.create({ creatorSubject: creator.creator_subject, title: b.title, body: b.body, tiers: b.tiers, actor });
+        res.status(201).json({ post: domain.posts.present(post, { unlocked: true }) });
+    }));
+    const ownPost = async (req, cap) => {
+        const post = await domain.posts.byId(req.params.id);
+        if (!post) fail(404, 'tips.post_not_found', 'no such post');
+        allow(req, cap, post.creator_subject);
+        return post;
+    };
+    r.post('/posts/:id/hide', edit, ...write(async (req, res) => {
+        const post = await ownPost(req, CAP.postModerate);
+        const actor = req.principal.kind === 'user' ? req.principal.subject : req.principal.sub;
+        res.json({ post: domain.posts.present(await domain.posts.hide(post.id, { actor })) });
+    }));
+    r.post('/posts/:id/unhide', edit, ...write(async (req, res) => {
+        const post = await ownPost(req, CAP.postModerate);
+        const actor = req.principal.kind === 'user' ? req.principal.subject : req.principal.sub;
+        res.json({ post: domain.posts.present(await domain.posts.unhide(post.id, { actor })) });
+    }));
     r.post('/goals/:id/close', edit, ...write(async (req, res) => res.json({ goal: await goals.close(await ownGoal(req, CAP.goalClose)) })));
 
     // ── Overlay tokens and configs ───────────────────────────
