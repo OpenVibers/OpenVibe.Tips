@@ -505,7 +505,7 @@ A placeholder is never counted as an implemented service.
 Part of the [OpenVibe network](https://openvibe.network). Built in the open by [OpenVibers](https://github.com/OpenVibers).
 
 <!-- versions:start -->
-- openvibe-contracts: v0.289.1
-- openvibe-sdk: v0.82.0
+- openvibe-contracts: v0.297.0
+- openvibe-sdk: v0.90.0
 - openvibe-shared: v4.115.1
 <!-- versions:end -->
