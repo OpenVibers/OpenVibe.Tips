@@ -75,7 +75,7 @@ const CAP = {
     postModerate: 'tips.post.moderate',
 };
 
-function v1Router({ domain, apiAuth, limits }) {
+function v1Router({ domain, apiAuth, limits, subjectAssertion }) {
     const r = express.Router();
     const { db, profiles, goals, interactions, overlays } = domain;
     const idem = idempotent(db, domain.now, domain.log);
@@ -106,6 +106,9 @@ function v1Router({ domain, apiAuth, limits }) {
         return profile;
     }
     const write = (handler) => [idem, wrap(handler)];
+    // The person a route names must be the person the assertion names (plan H1: ADR-003, the
+    // 2026-11-06 amendment). Without the module (an old caller) nothing is checked.
+    const assertion = subjectAssertion || { person: async () => null };
 
     // ── Profiles ─────────────────────────────────────────────
     r.get('/profiles/:creator', wrap(async (req, res) => {
@@ -191,6 +194,8 @@ function v1Router({ domain, apiAuth, limits }) {
                 allow(req, cap);
                 supporter = userSubject(b.supporter, 'supporter');
                 supporterName = displayName(b.supporter_name) || null;
+                // The service pays for this person: the person's own assertion says they allowed it.
+                await assertion.person(req, supporter);
             } else {
                 supporter = p.subject;
                 supporterName = displayName(b.supporter_name) || p.name || p.username;
@@ -198,18 +203,28 @@ function v1Router({ domain, apiAuth, limits }) {
             const profile = await creatorOf(req, b.creator);
             const funding = b.pay_with || 'credit';
             const tp = req.ov && req.ov.traceparent;
+            // The person's own subject assertion (plan H1): it travels on to Billing, which checks it
+            // against the person the money is for. A service that vouches for the person brings its
+            // own assertion; a person tipping for themselves has their token, so Tips mints one for
+            // Billing (Tips is the service that carries it).
+            let carried = String(req.headers['x-ov-subject-assertion'] || '').trim() || null;
+            if (!carried && p.kind === 'user' && typeof assertion.mint === 'function') {
+                const auth = String(req.headers.authorization || '');
+                const userToken = /^Bearer\s+/i.test(auth) ? auth.slice(7).trim() : null;
+                carried = await assertion.mint({ userToken, subject: supporter, audience: 'openvibe.billing', for: ['svc:tips'] });
+            }
             const { interaction, replay } = await interactions.request(profile, { ...b, kind }, { supporter, supporterName, funding, idempotencyKey: req.idempotencyKey });
             let i = interaction;
             const viewer = p.kind === 'service' ? 'service' : 'supporter';
             if (!replay) {
                 if (funding === 'credit') {
-                    const out = await interactions.transfer(i, { traceparent: tp });
+                    const out = await interactions.transfer(i, { traceparent: tp, assertion: carried });
                     i = await interactions.get(db, i.id);
                     if (out.refused) {
                         fail(out.refused === 'billing.insufficient_funds' ? 409 : 422, out.refused, out.detail || 'Billing refused the tip', { interaction: await interactions.present(db, i, { viewer: 'supporter' }) });
                     }
                 } else {
-                    i = (await interactions.startCheckout(i, { provider: b.provider, traceparent: tp })).interaction;
+                    i = (await interactions.startCheckout(i, { provider: b.provider, traceparent: tp, assertion: carried })).interaction;
                 }
             } else if (i.payment_state === 'failed') {
                 fail(409, 'tips.payment_failed', i.failure || 'the payment for this request failed', { interaction: await interactions.present(db, i, { viewer: 'supporter' }) });
@@ -245,6 +260,7 @@ function v1Router({ domain, apiAuth, limits }) {
                 creator: q.creator ? (await creatorOf(req, q.creator)).creator_subject : null,
                 supporter: q.supporter ? userSubject(String(q.supporter), 'supporter') : null,
             };
+            if (filter.supporter) await assertion.person(req, filter.supporter);
             if (!filter.creator && !filter.supporter) fail(422, 'tips.invalid_input', 'creator or supporter is required');
         } else if (p.kind === 'user') {
             filter = q.as === 'creator' ? { creator: p.subject } : { supporter: p.subject };

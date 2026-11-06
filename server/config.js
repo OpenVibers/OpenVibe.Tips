@@ -53,6 +53,13 @@ function loadConfig(env = process.env) {
             audience: env.OV_NETWORK_AUDIENCE || 'openvibe.network',
         },
         audience: env.TIPS_AUDIENCE || 'openvibe.tips',
+        // Subject assertions (ADR-003, the 2026-11-06 amendment; plan H1): a route that names a
+        // person carries the person's own Network-signed assertion (X-OV-Subject-Assertion).
+        // TIPS_REQUIRE_SUBJECT_ASSERTION=on refuses the old way (the service vouching for its
+        // person) and turns the check on for every route that names a person.
+        subjectAssertion: {
+            required: String(env.TIPS_REQUIRE_SUBJECT_ASSERTION || 'off').toLowerCase() === 'on',
+        },
         // Tips' own client credentials (client `tips` in the Network): service tokens for Billing,
         // Events, Chat (delivery) and the Network; and the OAuth code flow for browser sign-in.
         oauth: {

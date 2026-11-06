@@ -145,7 +145,11 @@ function createApp(opts = {}) {
     // Per-actor limits on /api/v1 (api/actor-limits.js), counted once apiAuth resolved the caller.
     // opts.limitsNow: the limiter's clock (tests).
     const limits = createActorLimits({ config, valkey, now: opts.limitsNow || now, registry: metrics.registry, log });
-    app.use('/api/v1', express.json({ limit: '64kb' }), (req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); }, apiAuth.middleware, v1Router({ domain, apiAuth, limits }));
+    // Subject assertions on the money routes (ADR-003, the 2026-11-06 amendment; plan H1).
+    // The registry carries the counters: the number of per-person calls that still come without an
+    // assertion is what the flag plan waits for.
+    const subjectAssertion = require('./api/subject-assertion').createSubjectAssertion({ config, log, registry: metrics.registry });
+    app.use('/api/v1', express.json({ limit: '64kb' }), (req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); }, apiAuth.middleware, v1Router({ domain, apiAuth, limits, subjectAssertion }));
     app.use('/auth', createSessionRoutes(config, userAuth, { fetchImpl, log }));
     { const legal = require('openvibe-shared/legal'); app.get(legal.PATHS, legal.handler({ id: 'tips', service: 'tips', host: 'openvibe.tips', name: 'OpenVibe.Tips', profile: 'ugc' })); }
 
