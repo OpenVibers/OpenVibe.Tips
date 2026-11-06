@@ -5,27 +5,38 @@
  * shape as OpenVibe.Community's server/auth/routes.js. Registered in the Network as client `tips`
  * with redirect https://openvibe.tips/auth/callback.
  *
+ * The OAuth half is openvibe-sdk/sso's (createSsoClient): the authorize URL, the PKCE S256 pair (new
+ * here: this copied layer had none), the code, refresh and FedCM grants and the new GET /auth/health.
+ * The state is compared with the flow cookie in constant time, next is still sanitized by this repo's
+ * sanitizer, the viewer resolver and every permission check are untouched, and the redirect URI is
+ * unchanged.
+ *
  *   GET  /auth/login     → Network /oauth/authorize (?silent=1 → prompt=none; ?next= same-site path)
- *   GET  /auth/callback  → server-side code exchange, session cookies
+ *   GET  /auth/callback  → server-side code exchange with the PKCE verifier, session cookies
  *   POST /auth/fedcm     → the shared navbar's FedCM assertion → tokens (jwt-bearer grant)
+ *   GET  /auth/health    → does the Network accept this OAuth client? 503 only when it refuses it
  *   GET  /auth/logout    → clear cookies (best-effort refresh revoke), hint=guest
  *   GET  /auth/me        → the signed-in user (offline JWT verification)
  *   POST /auth/refresh   → rotate tokens
  *
- * Cookies (host-only): ov_token (access JWT, Lax, JS-readable for the navbar), ov_refresh (httpOnly,
- * Path=/auth), ov_sso_hint. These cookies only ever sign a person into the pages of this site;
- * overlays never use them (overlays hold their own revocable tokens).
+ * Cookies (host-only, the names this site has always used): ov_token (access JWT, Lax, JS-readable for the navbar),
+ * ov_refresh (httpOnly, Path=/auth), ov_sso_hint. These cookies only ever sign a person into the pages of this site;
+ * overlays never use them (overlays hold their own revocable tokens). The short-lived flow cookies on /auth are
+ * ov_oauth_state, ov_oauth_next, ov_oauth_silent plus the PKCE verifier in ov_oauth_verifier.
  */
 const express = require('express');
 const crypto = require('crypto');
+const { createSsoClient, failurePage } = require('openvibe-sdk/sso');
 const { userPrincipal } = require('../api/auth');
 
 const ACCESS_COOKIE = 'ov_token';
 const REFRESH_COOKIE = 'ov_refresh';
 const HINT_COOKIE = 'ov_sso_hint';
 const STATE_COOKIE = 'ov_oauth_state';
+const VERIFIER_COOKIE = 'ov_oauth_verifier';
 const NEXT_COOKIE = 'ov_oauth_next';
 const SILENT_COOKIE = 'ov_oauth_silent';
+const SITE_NAME = 'OpenVibe.Tips';
 
 function claimsToUser(claims) {
     if (!claims) return null;
@@ -61,6 +72,13 @@ function withParam(target, key, value) {
     return `${base}${base.includes('?') ? '&' : '?'}${encodeURIComponent(key)}=${encodeURIComponent(value)}${hash}`;
 }
 
+/** Compare two strings in constant time (the state must match the browser that started the flow). */
+function sameString(a, b) {
+    const x = Buffer.from(String(a || ''));
+    const y = Buffer.from(String(b || ''));
+    return x.length === y.length && x.length > 0 && crypto.timingSafeEqual(x, y);
+}
+
 /** Page middleware: req.viewer = the signed-in person (principal shape) or null. Never blocks. */
 function viewerMiddleware(userAuth) {
     return async (req, _res, next) => {
@@ -72,9 +90,25 @@ function viewerMiddleware(userAuth) {
     };
 }
 
-function createSessionRoutes(config, userAuth, { fetchImpl = globalThis.fetch } = {}) {
+function createSessionRoutes(config, userAuth, { fetchImpl = globalThis.fetch, log = console } = {}) {
     const router = express.Router();
     const secure = config.cookies.secure;
+    // The OAuth half is the SDK's: the authorize URL, the PKCE S256 pair, the token grants and the health check.
+    const sdkSso = createSsoClient({
+        site: 'tips',
+        siteName: SITE_NAME,
+        baseUrl: config.baseUrl,
+        clientId: config.oauth.clientId,
+        clientSecret: config.oauth.clientSecret,
+        redirectUri: config.oauth.redirectUri,
+        scope: config.oauth.scope,
+        networkUrl: config.network.url,
+        networkInternalUrl: config.network.internalUrl,
+        issuer: config.network.issuer,
+        secureCookies: secure,
+        fetch: fetchImpl,
+        log,
+    });
     const accessOpts = () => ({ sameSite: 'lax', secure, httpOnly: false, path: '/', maxAge: 24 * 3600 * 1000 });
     const refreshOpts = () => ({ sameSite: 'lax', secure, httpOnly: true, path: '/auth', maxAge: 30 * 24 * 3600 * 1000 });
     const flowOpts = () => ({ sameSite: 'lax', secure, httpOnly: true, path: '/auth', maxAge: 10 * 60 * 1000 });
@@ -89,44 +123,18 @@ function createSessionRoutes(config, userAuth, { fetchImpl = globalThis.fetch } 
         res.clearCookie(ACCESS_COOKIE, { ...accessOpts(), maxAge: undefined });
         res.clearCookie(REFRESH_COOKIE, { ...refreshOpts(), maxAge: undefined });
     }
-    function clearFlow(res) { for (const c of [STATE_COOKIE, NEXT_COOKIE, SILENT_COOKIE]) res.clearCookie(c, { path: '/auth' }); }
-
-    async function tokenGrant(body) {
-        let lastErr = null;
-        for (const base of [config.network.internalUrl, config.network.url]) {
-            if (!base) continue;
-            try {
-                const res = await fetchImpl(`${base}/oauth/token`, {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ client_id: config.oauth.clientId, client_secret: config.oauth.clientSecret, ...body }),
-                    signal: AbortSignal.timeout(10_000),
-                });
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok) {
-                    const err = new Error(data.error_description || data.error || `token grant failed (${res.status})`);
-                    err.status = res.status; err.error = data.error || 'invalid_grant';
-                    throw err;
-                }
-                return data;
-            } catch (err) {
-                lastErr = err;
-                if (err.status && err.status < 500) throw err;
-            }
-        }
-        throw lastErr || new Error('Network unreachable');
-    }
+    function clearFlow(res) { for (const c of [STATE_COOKIE, VERIFIER_COOKIE, NEXT_COOKIE, SILENT_COOKIE]) res.clearCookie(c, { path: '/auth' }); }
 
     router.get('/login', async (req, res) => {
         const silent = !!req.query.silent && req.query.silent !== '0';
         if (silent && await userAuth.verify(req.cookies && req.cookies[ACCESS_COOKIE])) { clearFlow(res); return res.redirect(sanitizeNext(req.query.next, config)); }
-        const { url, state } = userAuth.client.getAuthorizationUrl(config.oauth.scope);
-        let target = url;
-        if (silent) { const u = new URL(url); u.searchParams.set('prompt', 'none'); target = u.toString(); }
-        res.cookie(STATE_COOKIE, state, flowOpts());
+        const started = sdkSso.authorizeUrl({ silent });
+        res.cookie(STATE_COOKIE, started.state, flowOpts());
+        res.cookie(VERIFIER_COOKIE, started.verifier, flowOpts());
         const next = sanitizeNext(req.query.next, config);
         if (next !== '/') res.cookie(NEXT_COOKIE, next, flowOpts()); else res.clearCookie(NEXT_COOKIE, { path: '/auth' });
         if (silent) res.cookie(SILENT_COOKIE, '1', flowOpts()); else res.clearCookie(SILENT_COOKIE, { path: '/auth' });
-        res.redirect(target);
+        res.redirect(started.url);
     });
 
     router.get('/callback', async (req, res) => {
@@ -140,18 +148,36 @@ function createSessionRoutes(config, userAuth, { fetchImpl = globalThis.fetch } 
         }
         if (!code) return res.status(400).type('text/plain').send('Missing authorization code');
         const expected = req.cookies && req.cookies[STATE_COOKIE];
+        const verifier = req.cookies && req.cookies[VERIFIER_COOKIE];
         clearFlow(res);
-        if (!expected || !state || !crypto.timingSafeEqual(Buffer.from(String(state).padEnd(64).slice(0, 64)), Buffer.from(String(expected).padEnd(64).slice(0, 64)))) {
+        if (!verifier || !sameString(state, expected)) {
             return res.status(400).type('text/plain').send('Sign-in state mismatch — please try signing in again.');
         }
         try {
-            const data = await tokenGrant({ grant_type: 'authorization_code', redirect_uri: config.oauth.redirectUri, code });
+            const data = await sdkSso.tokenGrant({ grant_type: 'authorization_code', redirect_uri: config.oauth.redirectUri, code: String(code), code_verifier: verifier });
             setSession(res, data.access_token, data.refresh_token);
             return res.redirect(next);
         } catch (err) {
-            console.error('[Tips] code exchange failed:', err.message);
+            if (err.status === 401 || err.error === 'invalid_client' || err.error === 'unauthorized_client') {
+                log.error(`[Tips] the Network refuses this site's OAuth client (${err.error || err.status}): check OV_OAUTH_CLIENT_ID / OV_OAUTH_CLIENT_SECRET`);
+                return res.status(500).type('html').send(failurePage({
+                    siteName: SITE_NAME,
+                    title: 'Sign-in isn\'t working on OpenVibe.Bot right now',
+                    text: 'This is a problem on our side, not with your account, and it has been logged. Please try again a little later.',
+                    retryHref: `/auth/login?next=${encodeURIComponent(next)}`,
+                    backHref: next || '/',
+                }));
+            }
+            log.error(`[Tips] code exchange failed: ${err.message}`);
             return res.status(502).type('text/plain').send('Sign-in failed — could not reach OpenVibe.Network. Please try again.');
         }
+    });
+
+    // GET /auth/health: does the Network accept this OAuth client? 503 only when it refuses it.
+    router.get('/health', async (_req, res) => {
+        const client = await sdkSso.checkClient();
+        res.set('Cache-Control', 'no-store');
+        return res.status(client === 'invalid' ? 503 : 200).json({ ok: client !== 'invalid', client });
     });
 
     const fedcmBody = express.json({ limit: '16kb' });
@@ -164,7 +190,7 @@ function createSessionRoutes(config, userAuth, { fetchImpl = globalThis.fetch } 
         const a = Buffer.from(String((claims && claims.nonce) || '')); const b = Buffer.from(nonce);
         if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return res.status(400).json({ error: 'invalid_request', error_description: 'nonce mismatch' });
         try {
-            const data = await tokenGrant({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: token });
+            const data = await sdkSso.tokenGrant({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: token });
             if (!data.access_token) throw Object.assign(new Error('no token'), { status: 401, error: 'invalid_grant' });
             setSession(res, data.access_token, data.refresh_token);
             return res.json({ ok: true, user: data.user || claimsToUser(await userAuth.verify(data.access_token)) });
@@ -201,7 +227,7 @@ function createSessionRoutes(config, userAuth, { fetchImpl = globalThis.fetch } 
         const refresh = req.cookies && req.cookies[REFRESH_COOKIE];
         if (!refresh) return res.status(401).json({ error: 'No refresh token' });
         try {
-            const data = await tokenGrant({ grant_type: 'refresh_token', refresh_token: refresh });
+            const data = await sdkSso.tokenGrant({ grant_type: 'refresh_token', refresh_token: refresh });
             setSession(res, data.access_token, data.refresh_token);
             return res.json({ token: data.access_token, user: claimsToUser(await userAuth.verify(data.access_token)) });
         } catch (err) {

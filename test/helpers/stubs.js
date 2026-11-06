@@ -31,6 +31,8 @@ async function startNetwork() {
     const publicPem = publicKey.export({ type: 'spki', format: 'pem' });
     const privatePem = privateKey.export({ type: 'pkcs8', format: 'pem' });
     const grants = [];
+    // The sign-in codes Network issued (openvibe-sdk/sso exchanges one with the PKCE verifier): code → tokens.
+    const codes = new Map();
     const legacy = {};
     const resolves = [];
     let issuer = 'http://network.test';
@@ -55,9 +57,17 @@ async function startNetwork() {
         const raw = await readBody(req);
         if (req.url === '/api/.well-known/jwks') return send(res, 200, { public_key: publicPem, algorithm: 'RS256' });
         if (req.url === '/oauth/token' && req.method === 'POST') {
-            const body = Object.fromEntries(new URLSearchParams(raw));
+            // The Network takes the token grant as JSON (openvibe-sdk/sso) or as a form (the service clients).
+            const body = raw.trim().startsWith('{') ? JSON.parse(raw) : Object.fromEntries(new URLSearchParams(raw));
             grants.push(body);
             if (body.client_secret !== 'shh') return send(res, 401, { error: 'invalid_client' });
+            // A sign-in's code: the Network answers invalid_grant for a code it never issued.
+            if (body.grant_type === 'authorization_code') {
+                const c = codes.get(String(body.code || ''));
+                if (!c) return send(res, 400, { error: 'invalid_grant', error_description: 'unknown or expired code' });
+                codes.delete(String(body.code));
+                return send(res, 200, { access_token: c.access_token, refresh_token: c.refresh_token || null, token_type: 'Bearer', expires_in: 300 });
+            }
             const cap = String(body.scope || '').split(/\s+/).filter(Boolean);
             return send(res, 200, { access_token: signService({ sub: `svc:${body.client_id}`, aud: [body.audience], cap }), token_type: 'Bearer', expires_in: 300 });
         }
@@ -87,7 +97,13 @@ async function startNetwork() {
     });
     const url = await listen(server);
     issuer = url;
-    return { url, publicPem, signService, signUser, newUser, legacy, grants, resolves, close: () => new Promise((r) => server.close(r)) };
+    /** A sign-in code the stand-in Network accepts: the code the browser comes back with. */
+    function issueCode({ access_token = null, refresh_token = 'refresh_test' } = {}) {
+        const code = `code_${crypto.randomBytes(8).toString('hex')}`;
+        codes.set(code, { access_token: access_token || signUser({ subject: 'usr_test', username: 'someone' }), refresh_token });
+        return code;
+    }
+    return { url, publicPem, signService, signUser, newUser, legacy, grants, resolves, issueCode, close: () => new Promise((r) => server.close(r)) };
 }
 
 /** Billing as Tips sees it. */
