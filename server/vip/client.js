@@ -100,13 +100,21 @@ function createVip(config, { fetchImpl = globalThis.fetch, now = () => Date.now(
         return config.vip.publicUrl + '/' + encodeURIComponent(c.username) + '#plan-' + encodeURIComponent(plan.slug);
     }
 
+    /**
+     * A membership changed (OpenVibe.VIP's vip.membership.changed): the cached answer for that pair
+     * is dropped at once, so a cancellation takes effect without waiting for the TTL.
+     */
+    function invalidate(envelope) {
+        return cache.handleEvent(envelope);
+    }
+
     /** The entitlement answer for member → creator (fail-closed; never throws). */
     async function entitlement({ subject, creator: creatorSubject } = {}) {
         if (!subject || !creatorSubject || subject === creatorSubject) return { active: false, status: 'inactive', reason: 'signed_out' };
         return await cache.entitlement({ subject, creator: creatorSubject, product: 'tips' });
     }
 
-    return { entitlement, creator, tiers, joinUrl, enabled };
+    return { entitlement, creator, tiers, joinUrl, invalidate, enabled };
 }
 
 module.exports = { createVip, AUDIENCE, SCOPE };

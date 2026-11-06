@@ -28,7 +28,7 @@ function createPosts(ctx) {
     /** The creator's posts (published only, unless the caller may moderate). */
     const rows = async ({ creatorSubject, includeHidden = false }) => {
         const st = includeHidden ? ['published', 'hidden'] : ['published'];
-        return await db.many(sql`SELECT * FROM creator_posts WHERE creator_subject = ${String(creatorSubject || '')} AND status = ANY(${st}) ORDER BY published_at DESC, created_at DESC`);
+        return await db.many(sql`SELECT * FROM creator_posts WHERE creator_subject = ${String(creatorSubject || '')} AND status = ANY(${st}) ORDER BY published_at DESC, created_at DESC, id DESC`);
     };
     /** Every creator's posts, newest first (the moderation list). */
     const recent = async ({ limit = 50 } = {}) => await db.many(sql`SELECT * FROM creator_posts ORDER BY created_at DESC LIMIT ${Number(limit)}`);

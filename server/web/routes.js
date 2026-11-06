@@ -59,7 +59,17 @@ function createWebRoutes({ domain, config, layout, userAuth, liveNow = { list: a
     const form = express.urlencoded({ extended: false, limit: '32kb' });
     const secret = config.formSecret || crypto.randomBytes(32).toString('hex');
 
-    const html = (res, body, status = 200, extraHeaders = {}) => res.status(status).set({ 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache', ...extraHeaders }).send(body);
+    // Every page here is rendered for one viewer: the footer shows who is signed in, and a member's
+    // creator page carries the text of the posts they may read. A shared cache stores by URL and
+    // ignores Vary, Cookie and Authorization (the 10-15 Media leak), so every HTML answer is
+    // private and says it varies by cookie. The machine-readable pages (robots.txt, sitemap.xml,
+    // llms.txt, llms-full.txt) and the agent twins carry no viewer's state and stay public.
+    const html = (res, body, status = 200, extraHeaders = {}) => res.status(status).set({
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'private, no-cache',
+        Vary: 'Cookie',
+        ...extraHeaders,
+    }).send(body);
     const pageFor = (req, o) => {
         // A public page names its Markdown twin in the Link header, exactly as the agent layer's own
         // responses do; a page rendered for a signed-in person (noindex) has no twin and no header.

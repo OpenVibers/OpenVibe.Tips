@@ -6,6 +6,7 @@
  * the creator's own headline is the only pitch on their page.
  */
 const showcase = require('openvibe-shared/showcase');
+const glyphs = require('openvibe-shared/glyphs');
 const { esc } = require('./layout');
 const { VOICES } = require('../domain/profiles');
 const supportLinks = require('../domain/support-links');
@@ -13,6 +14,17 @@ const { pickBlock, foldBlock } = require('../render/short');
 
 const n = (v) => Number(v || 0).toLocaleString('en-US');
 const when = (s) => (s ? esc(String(s).replace('T', ' ').slice(0, 16)) + ' UTC' : '');
+// The house date (the format every OpenVibe page shows a date in): a day, never a timestamp.
+const fmtDate = (s) => {
+    if (!s) return '';
+    const d = new Date(s);
+    return Number.isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
+};
+// The shared lock glyph (openvibe-shared/glyphs), drawn on the server: the same drawing the network's
+// icons use, without a script or a font. It carries its own aria-hidden, so a screen reader reads the
+// line, not the lock.
+const lockGlyph = '<span style="display:inline-block;width:1.05em;height:1.05em;line-height:1;vertical-align:-.18em;margin-right:.3em">'
+    + glyphs.svg('lock', { size: 16 }) + '</span>';
 // A Media object is stored at full size: ask its resize ladder for the width drawn on this page (96 for the 40 px
 // creator card, 320 for the 96 px creator page head). Any other URL — an avatar from another host, or one already
 // sized — is used unchanged.
@@ -221,28 +233,39 @@ function supportLinksSection(profile) {
 }
 
 /**
- * The creator page's members-only posts. The title and the tier are public; the text is only ever
- * rendered for a member of a tier the post is written for (the route decides that, after the
- * entitlement check). Everyone else gets a card that says so, and a way to join when a tier that
- * reads the post can be joined.
+ * One post card: the title, one quiet line (the tier it is written for and the date) and, for
+ * someone who is not a member of that tier, the way in. The text is only ever rendered for a member
+ * of a tier that reads it (the route decides that, after the entitlement check).
+ */
+function postCard(p) {
+    const tier = p.tiers.length ? 'Tier ' + p.tiers.join(', ') : 'a tier';
+    const date = p.published_at ? fmtDate(p.published_at) : '';
+    // A member reads the text: the line names the tier, there is nothing left to unlock.
+    const line = p.unlocked
+        ? esc(tier) + (date ? ' · ' + esc(date) : '')
+        : lockGlyph + 'For ' + esc(tier) + ' members' + (date ? ' · ' + esc(date) : '');
+    const body = p.unlocked
+        ? '<div class="post-body">' + p.body_html + '</div>'
+        // A button that leads nowhere is worse than no button: no way in, no button.
+        : (p.join_url ? '<p><a class="btn" href="' + esc(p.join_url) + '">Become a member</a></p>' : '');
+    return '<article class="card post"><h3>' + esc(p.title) + '</h3><p class="muted small">' + line + '</p>' + body + '</article>';
+}
+
+/**
+ * The creator page's members-only posts: the newest three, and the rest in a counted fold that opens
+ * in place (the content stays in the page; nothing is hidden with display:none and there are no
+ * tabs). The title and the tier are public; the text is not.
  */
 function postsSection(posts) {
     if (!posts || !posts.length) return '';
-    const items = posts.map((p) => {
-        const tiers = p.tiers.length ? p.tiers.map((t) => 'Tier ' + t).join(', ') : 'a tier';
-        const meta = '<p class="muted small">' + esc(tiers) + (p.published_at ? ' · ' + when(p.published_at) : '') + '</p>';
-        const body = p.unlocked
-            ? '<div class="post-body">' + p.body_html + '</div>'
-            : '<div class="post-locked"><p><b>Members only</b></p>'
-                + '<p class="muted">This post is for the members of ' + esc(tiers)
-                + (p.join_url ? '.' : ', and no tier that reads it can be joined yet.') + '</p>'
-                + (p.join_url ? '<p><a class="btn" href="' + esc(p.join_url) + '">Become a member</a></p>' : '')
-                + '</div>';
-        return '<article class="card post"><h3>' + esc(p.title) + '</h3>' + meta + body + '</article>';
-    }).join('');
+    const shown = posts.slice(0, 3);
+    const rest = posts.slice(3);
+    const more = rest.length
+        ? '<details class="tp-fold tp-fold-block" id="posts-more" open><summary>More posts (' + rest.length + ')</summary>'
+            + rest.map(postCard).join('') + '</details>'
+        : '';
     return '<section class="posts" aria-labelledby="posts-h"><h2 id="posts-h">Members-only posts</h2>'
-        + '<p class="muted small">Posts for the members of a tier. The title is public; the text is not.</p>'
-        + '<div class="post-list">' + items + '</div></section>';
+        + '<div class="post-list">' + shown.map(postCard).join('') + more + '</div></section>';
 }
 
 /**
@@ -282,9 +305,9 @@ function creatorPage({ profile, goals, viewer, csrf, idem, values, providers, er
   <div><h1>${esc(profile.display_name)}</h1>${profile.headline ? `<p class="headline">${esc(profile.headline)}</p>` : ''}
   <p class="links"><a href="https://openvibe.live/@${esc(profile.handle)}">Watch on OpenVibe.Live</a> · <a href="/${esc(profile.handle)}/goals">Goals</a>${profile.page.supporters_page ? ` · <a href="/${esc(profile.handle)}/supporters">Supporters</a>` : ''}</p></div>
 </section>
+${tipForm({ profile, goals, viewer, csrf, idem, values, providers, error, sounds })}
 ${active.length ? `<section><h2>Goals</h2>${active.map(goalCard).join('')}</section>` : ''}
 ${postsSection(posts)}
-${tipForm({ profile, goals, viewer, csrf, idem, values, providers, error, sounds })}
 ${supportLinksSection(profile)}`;
 }
 

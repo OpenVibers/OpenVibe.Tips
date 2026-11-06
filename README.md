@@ -356,10 +356,19 @@ plans). The title and the tiers are public; the text is served only to a member 
   not in `/llms-full.txt`, not in the sitemap, not in a preview, and not in the API list
   ([server/domain/posts.js](server/domain/posts.js), [server/vip/client.js](server/vip/client.js)). The check is
   OpenVibe.VIP's entitlement answer for member → creator (Billing holds the truth, ADR-012), behind the shared
-  product cache (`openvibe-sdk/vip`): a "yes" lives at most `TIPS_VIP_CACHE_TTL_MS`, a failure is a denial.
+  product cache (`openvibe-sdk/vip`): a "yes" lives at most `TIPS_VIP_CACHE_TTL_MS` — 30 s by default and never
+  more than 60 s — and a failure is a denial. A membership that ends is announced by OpenVibe.VIP
+  (`vip.membership.changed`, subscribed in `scripts/subscribe.js`); the cached grant for that pair is dropped
+  at once, so a cancelled member loses access without waiting for the TTL.
 - **Everyone else gets a card that says so**: "Members only", the tiers it is written for and a "Become a member"
   button pointing at the creator's VIP plan. A tier nobody can join yet shows no button — a button that leads
   nowhere is worse than none.
+- **Every HTML answer is private.** A shared cache (Cloudflare) stores by URL and ignores `Vary`, `Cookie`
+  and `Authorization` (the 10-15 Media leak), and these pages carry the viewer's own state: the footer
+  shows who is signed in, and a member's creator page carries the text of the posts they may read. So
+  every page answers `Cache-Control: private, no-cache` with `Vary: Cookie`. The machine-readable pages
+  (`robots.txt`, `sitemap.xml`, `llms.txt`, `llms-full.txt`) and the agent twins carry no viewer's state
+  and stay public; the API answers `no-store`.
 - **The creator** writes and hides their posts in the dashboard (`/dashboard`, `POST /dashboard/posts`) and always
   reads their own text. A hidden post is not served at all (neither its title nor its text).
 - **The API**: `GET /api/v1/profiles/:creator/posts`, `GET /api/v1/profiles/:creator/posts/:id`,

@@ -44,6 +44,13 @@ function consumerRouter({ domain, config, log = console, accountData = null, acc
 
     /** Apply one envelope (also used by tests and the replay tool). Returns { duplicate, outcome }. */
     async function apply(event) {
+        // A membership changed at OpenVibe.VIP: the cached entitlement for that pair goes at once, so a
+        // cancellation opens no post before the TTL is up. It changes no money state, so it needs no
+        // inbox row of its own (applying it twice changes nothing).
+        if (event.event_type === 'vip.membership.changed') {
+            const dropped = domain.vip && typeof domain.vip.invalidate === 'function' ? domain.vip.invalidate(event) : false;
+            return { duplicate: false, outcome: dropped ? 'vip entitlement dropped' : 'ignored:type' };
+        }
         if (ACCOUNT_TOPICS.includes(event.event_type)) {
             if (!accountData || !accountSend) throw new Error('account export and deletion are not configured');
             return { duplicate: false, outcome: await accountData.apply(event, { send: accountSend }) };

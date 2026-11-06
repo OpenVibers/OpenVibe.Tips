@@ -181,7 +181,8 @@ function createApp(opts = {}) {
 
     app.use((req, res) => {
         if (req.path.startsWith('/api/') || req.path.startsWith('/internal/')) return http.sendProblem(res, 404, 'not_found', { ctx: req.ov });
-        return res.status(404).type('html').send(layout.page({ title: 'Not found', robots: 'noindex', body: pages.errorPage({ status: 404, title: 'Nothing here', message: 'That page does not exist.' }) }));
+        return res.status(404).type('html').set({ 'Cache-Control': 'private, no-cache', Vary: 'Cookie' })
+            .send(layout.page({ title: 'Not found', robots: 'noindex', body: pages.errorPage({ status: 404, title: 'Nothing here', message: 'That page does not exist.' }) }));
     });
     // eslint-disable-next-line no-unused-vars
     app.use((err, req, res, next) => {
@@ -195,7 +196,8 @@ function createApp(opts = {}) {
         log.error('[Tips] unhandled error:', err);
         if (res.headersSent) return undefined;
         if (req.path.startsWith('/api/')) return http.sendProblem(res, 500, 'tips.internal', { ctx: req.ov });
-        return res.status(500).type('html').send(layout.page({ title: 'Error', robots: 'noindex', body: pages.errorPage({ status: 500, title: 'Something went wrong', message: 'This one is on us. Please try again.' }) }));
+        return res.status(500).type('html').set({ 'Cache-Control': 'private, no-cache', Vary: 'Cookie' })
+            .send(layout.page({ title: 'Error', robots: 'noindex', body: pages.errorPage({ status: 500, title: 'Something went wrong', message: 'This one is on us. Please try again.' }) }));
     });
 
     Object.assign(app.locals, { config, db, valkey, domain, keys, outbox, adapters, billing, vip, consumer, metrics, indexnow, accountData });
