@@ -114,7 +114,8 @@ function createApp(opts = {}) {
         // connect-src openvibe.events: release notifications (release-watch's EventSource, openvibe-shared 1.17).
         res.setHeader('Content-Security-Policy', [
             "default-src 'self'", "script-src 'self' 'unsafe-inline' https://openvibe.network https://static.cloudflareinsights.com", "style-src 'self' 'unsafe-inline' https://openvibe.network",
-            "img-src 'self' data: https:", "media-src 'self' https:", "connect-src 'self' https://openvibe.network https://openvibe.events https://cloudflareinsights.com", "frame-src 'self' https://openvibe.network",
+            // The navbar's Messages count asks Chat (openvibe-shared 4.130.0).
+            "img-src 'self' data: https:", "media-src 'self' https:", "connect-src 'self' https://openvibe.chat https://openvibe.network https://openvibe.events https://cloudflareinsights.com", "frame-src 'self' https://openvibe.network",
             "frame-ancestors 'self'", "object-src 'none'", "base-uri 'self'", "form-action 'self' https://openvibe.network https:",
         ].join('; '));
         next();
