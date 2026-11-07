@@ -50,7 +50,7 @@ const links = require('../server/domain/support-links');
     });
 
     await check('the tip page lists them as paid outside OpenVibe, nofollow and in a new tab', async () => {
-        const page = await get('/tierra');
+        const page = await get('/@tierra');
         assert.strictEqual(page.status, 200);
         assert.match(page.text, /Other ways to support/);
         assert.match(page.text, /<a class="btn ghost" href="https:\/\/ko-fi\.com\/tierra_tv" rel="nofollow noopener ugc" target="_blank">Ko-fi<\/a>/);

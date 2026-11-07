@@ -78,7 +78,7 @@ const WAV = Buffer.concat([Buffer.from('RIFF'), Buffer.from([0x24, 0, 0, 0]), Bu
     });
 
     await check('switched off, nobody can buy a sound; switched on, the page offers them with a preview', async () => {
-        assert.ok(!(await get('/alex', viewer)).text.includes('name="sound_id"'));
+        assert.ok(!(await get('/@alex', viewer)).text.includes('name="sound_id"'));
         const off = await t.call('POST', '/api/v1/sound-requests', { user: viewer, body: { creator: 'alex', amount: 100, sound: { id: horn.id } } });
         assert.strictEqual(off.status, 409);
         assert.strictEqual(off.json.code, 'tips.sounds_disabled');
@@ -86,7 +86,7 @@ const WAV = Buffer.concat([Buffer.from('RIFF'), Buffer.from([0x24, 0, 0, 0]), Bu
         assert.strictEqual(on.status, 200, on.text);
         assert.deepStrictEqual(on.json.profile.sounds, { enabled: true });
         assert.strictEqual(on.json.profile.minimums.sound, 60);
-        const page = await get('/alex', viewer);
+        const page = await get('/@alex', viewer);
         assert.match(page.text, /A sound \(played on stream\)/);
         assert.match(page.text, new RegExp(`name="sound_id" value="${horn.id}" checked`));
         assert.match(page.text, new RegExp(`<audio controls preload="none" src="/sounds/${horn.id}">`));

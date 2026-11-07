@@ -190,7 +190,7 @@ function createProfiles(ctx) {
         const visible = (before && before.page_enabled) || (after && after.page_enabled);
         const handle = (after && after.handle) || (before && before.handle);
         if (!visible || !handle) return;
-        inx.pingSoon([`${ctx.config.baseUrl}/${handle}`, `${ctx.config.baseUrl}/sitemap.xml`]);
+        inx.pingSoon([`${ctx.config.baseUrl}/@${handle}`, `${ctx.config.baseUrl}/sitemap.xml`]);
     }
 
     /** Public shape; `owner` adds the settings only the creator sees. */
@@ -198,7 +198,7 @@ function createProfiles(ctx) {
         if (!p) return null;
         const out = {
             creator: { type: 'user', id: p.creator_subject }, handle: p.handle, display_name: p.display_name, avatar_url: p.avatar_url || null,
-            headline: p.headline || null, page_enabled: p.page_enabled, accepting: p.accepting, url: `${ctx.config.baseUrl}/${p.handle}`,
+            headline: p.headline || null, page_enabled: p.page_enabled, accepting: p.accepting, url: `${ctx.config.baseUrl}/@${p.handle}`,
             minimums: {
                 tip: p.min_amount, paid_message: p.paid_message_min, tts: p.tts_enabled ? p.tts_min_amount : null,
                 media_request: p.media_requests_enabled ? p.media_request_min : null, sound: p.sounds_enabled ? Number(p.sound_min) : null,
@@ -210,7 +210,7 @@ function createProfiles(ctx) {
             // Other ways to support, paid outside OpenVibe (support-links.js): Tips builds each link.
             support_links: supportLinks.present(p.support_links),
             page: p.page,
-            supporters_url: p.page.supporters_page ? `${ctx.config.baseUrl}/${p.handle}/supporters` : null,
+            supporters_url: p.page.supporters_page ? `${ctx.config.baseUrl}/@${p.handle}/supporters` : null,
             currency: 'vibes-bits',
         };
         if (owner) Object.assign(out, { filter: p.filter, revision: p.revision, created_at: p.created_at, updated_at: p.updated_at });

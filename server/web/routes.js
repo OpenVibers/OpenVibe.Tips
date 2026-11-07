@@ -129,7 +129,7 @@ function createWebRoutes({ domain, config, layout, userAuth, liveNow = { list: a
     })));
     r.get('/sitemap.xml', async (req, res) => {
         const rows = await db.many(sql`SELECT handle, updated_at FROM creator_tip_profiles WHERE page_enabled ORDER BY handle`);
-        const urls = [{ loc: `${config.baseUrl}/`, lastmod: BOOT_AT }, ...rows.map((p) => ({ loc: `${config.baseUrl}/${p.handle}`, lastmod: p.updated_at }))];
+        const urls = [{ loc: `${config.baseUrl}/`, lastmod: BOOT_AT }, ...rows.map((p) => ({ loc: `${config.baseUrl}/@${p.handle}`, lastmod: p.updated_at }))];
         res.type('application/xml').set('Cache-Control', cache.htmlHeaders({ maxAge: 900 })).send(seo.sitemapXml(urls));
     });
     // /llms.txt (llmstxt.org): a plain-markdown map of the site for language-model crawlers.
@@ -172,7 +172,7 @@ function createWebRoutes({ domain, config, layout, userAuth, liveNow = { list: a
                 ] },
                 { title: 'Creator pages', pages: rows.map((c) => ({
                     title: `${c.display_name} on OpenVibe.Tips`,
-                    url: `/${c.handle}`,
+                    url: `/@${c.handle}`,
                     text: `The public support page of ${c.display_name} (@${c.handle}): their goals and a tip form that works without JavaScript. Tips settle through OpenVibe Billing and the overlay alerts belong to the creator. The goals page and, only when the creator switches it on, the supporters page are public too.`,
                 })) },
                 { title: 'Legal', pages: legal.PATHS.map((p) => ({
@@ -538,7 +538,7 @@ function createWebRoutes({ domain, config, layout, userAuth, liveNow = { list: a
         const p = await profiles.byHandle(db, req.params.handle);
         const owner = !!(p && req.viewer && req.viewer.subject === p.creator_subject);
         if (!p || (!p.page_enabled && !owner)) return notFound(req, res);
-        if (p.handle !== String(req.params.handle)) return res.redirect(301, `/${p.handle}`);   // @name, Name → the canonical path
+        if (p.handle !== String(req.params.handle)) return res.redirect(301, `/@${encodeURIComponent(p.handle)}`);   // Name → the one canonical /@name
         // The page shows what the public sees, for the creator too (a preview); the dashboard has the rest.
         const list = await goals.publicGoals(db, await goals.list(db, p.creator_subject), p);
         // The members-only posts: the title and the tier are public, the text only for a member of a
@@ -547,26 +547,29 @@ function createWebRoutes({ domain, config, layout, userAuth, liveNow = { list: a
         const posts = await domain.posts.view({ creatorSubject: p.creator_subject, memberSubject: req.viewer ? req.viewer.subject : null, plans: vipCreator ? vipCreator.plans : [], owner });
         for (const post of posts) post.join_url = post.unlocked ? null : await domain.vip.joinUrl(p.creator_subject, post.tiers);
         const csrf = req.viewer ? csrfFor(req.viewer.subject) : '';
-        const jsonLd = p.page_enabled ? [{ '@context': 'https://schema.org', '@type': 'ProfilePage', name: p.display_name, url: `${config.baseUrl}/${p.handle}`, mainEntity: { '@type': 'Person', name: p.display_name, alternateName: p.handle, image: p.avatar_url || undefined } }] : [];
+        const jsonLd = p.page_enabled ? [{ '@context': 'https://schema.org', '@type': 'ProfilePage', name: p.display_name, url: `${config.baseUrl}/@${p.handle}`, mainEntity: { '@type': 'Person', name: p.display_name, alternateName: p.handle, image: p.avatar_url || undefined } }] : [];
         return html(res, pageFor(req, {
-            title: `Support ${p.display_name}`, active: 'creator', canonicalPath: `/${p.handle}`,
+            title: `Support ${p.display_name}`, active: 'creator', canonicalPath: `/@${p.handle}`,
             description: p.headline || `Tip ${p.display_name} on OpenVibe.Tips: tips, goals, paid messages${p.tts_enabled ? ', text-to-speech' : ''}${p.media_requests_enabled ? ', media requests' : ''}.`,
             robots: p.page_enabled ? 'index,follow' : 'noindex,nofollow', ogImage: p.avatar_url || undefined, jsonLd,
             body: pages.creatorPage({ profile: p, goals: list, viewer: req.viewer, csrf, idem: idem(), values, providers, error, ownerPreview: !p.page_enabled, sounds: p.sounds_enabled ? await sounds.list(db, p.creator_subject) : [], posts }),
         }), status, p.page_enabled ? {} : { 'X-Robots-Tag': 'noindex, nofollow' });
     }
-    r.get('/:handle', withViewer, async (req, res, next) => (profiles.normalizeHandle(req.params.handle) ? await creatorView(req, res) : next()));
-    r.get('/:handle/goals', withViewer, async (req, res, next) => {
+    // The canonical creator addresses: /@<handle>. The root /<handle> forms are kept only as 301s from the old
+    // links (and the reserved list only guards that old space); new links, canonicals, the sitemap and IndexNow
+    // all use /@.
+    r.get('/@:handle', withViewer, async (req, res, next) => (profiles.normalizeHandle(req.params.handle) ? await creatorView(req, res) : next()));
+    r.get('/@:handle/goals', withViewer, async (req, res, next) => {
         const p = await profiles.byHandle(db, req.params.handle);
         if (!p) return next();
         const owner = req.viewer && req.viewer.subject === p.creator_subject;
         if (!p.page_enabled && !owner) return notFound(req, res);
         return html(res, pageFor(req, {
-            title: `${p.display_name} — goals`, canonicalPath: `/${p.handle}/goals`, robots: p.page_enabled ? 'index,follow' : 'noindex,nofollow',
+            title: `${p.display_name} — goals`, canonicalPath: `/@${p.handle}/goals`, robots: p.page_enabled ? 'index,follow' : 'noindex,nofollow',
             body: pages.goalsPage({ profile: p, goals: await goals.publicGoals(db, await goals.list(db, p.creator_subject), p) }),
         }));
     });
-    r.get('/:handle/supporters', withViewer, async (req, res, next) => {
+    r.get('/@:handle/supporters', withViewer, async (req, res, next) => {
         const p = await profiles.byHandle(db, req.params.handle);
         if (!p) return next();
         const owner = req.viewer && req.viewer.subject === p.creator_subject;
@@ -577,15 +580,38 @@ function createWebRoutes({ domain, config, layout, userAuth, liveNow = { list: a
         const recent = recentRows ? recentRows.map((v) => (p.page.supporters_amounts ? v : { ...v, amount: null })) : null;
         const indexable = p.page_enabled && p.page.supporters_page;
         return html(res, pageFor(req, {
-            title: `${p.display_name} — supporters`, canonicalPath: `/${p.handle}/supporters`, robots: indexable ? 'index,follow' : 'noindex,nofollow',
+            title: `${p.display_name} — supporters`, canonicalPath: `/@${p.handle}/supporters`, robots: indexable ? 'index,follow' : 'noindex,nofollow',
             body: pages.supportersPage({ profile: p, leaderboard, recent }),
         }), 200, indexable ? {} : { 'X-Robots-Tag': 'noindex, nofollow' });
     });
 
-    r.post('/:handle/tip', withViewer, form, async (req, res, next) => {
+    // Old root links, for the 301 window: /name → /@name (query kept). A name that is not a creator is still a
+    // 404; the reserved names never redirect because normalizeHandle refuses them.
+    const legacy = (suffix) => async (req, res, next) => {
+        const handle = profiles.normalizeHandle(req.params.handle);
+        if (!handle) return next();
+        const p = await profiles.byHandle(db, handle);
+        if (!p) return next();
+        const q = req.originalUrl.includes('?') ? req.originalUrl.slice(req.originalUrl.indexOf('?')) : '';
+        return res.redirect(301, `/@${encodeURIComponent(p.handle)}${suffix}${q}`);
+    };
+    r.get('/:handle', withViewer, legacy(''));
+    r.get('/:handle/goals', withViewer, legacy('/goals'));
+    r.get('/:handle/supporters', withViewer, legacy('/supporters'));
+    // Old in-flight tip forms: 308 keeps the method and body while moving them to the canonical address.
+    r.post('/:handle/tip', withViewer, async (req, res, next) => {
+        if (String(req.params.handle).startsWith('@')) return next();   // the canonical /@:handle/tip route below
+        const handle = profiles.normalizeHandle(req.params.handle);
+        if (!handle) return next();
+        const p = await profiles.byHandle(db, handle);
+        if (!p) return next();
+        return res.redirect(308, `/@${encodeURIComponent(p.handle)}/tip`);
+    });
+
+    r.post('/@:handle/tip', withViewer, form, async (req, res, next) => {
         const p = await profiles.byHandle(db, req.params.handle);
         if (!p) return next();
-        if (!req.viewer) return res.redirect(303, `/auth/login?next=${encodeURIComponent(`/${p.handle}`)}`);
+        if (!req.viewer) return res.redirect(303, `/auth/login?next=${encodeURIComponent(`/@${p.handle}`)}`);
         const b = req.body || {};
         const values = {
             kind: b.kind, amount: b.amount, message: b.message, tts_text: b.tts_text, tts_voice: b.tts_voice, media_url: b.media_url, sound_id: b.sound_id, goal_id: b.goal_id, pay_with: b.pay_with,
