@@ -167,6 +167,21 @@ function createApp(opts = {}) {
         },
     }));
     const liveNow = opts.liveNow || require('./clients/live-now').createLiveNow({ config, fetchImpl: opts.fetchImpl, log });
+    // Old root creator links (and their .md twins) move to /@name with one 301. This sits before the agent
+    // layer, which otherwise would sign /name.md with the old path as its canonical. Reserved names and
+    // unknown handles fall through (404), and only GET/HEAD move.
+    app.use(async (req, res, next) => {
+        if (!['GET', 'HEAD'].includes(req.method)) return next();
+        const m = /^\/([^/@][^/]*)(\/goals|\/supporters)?(\.md)?$/.exec(req.path);
+        if (!m) return next();
+        const handle = domain.profiles.normalizeHandle(m[1]);
+        if (!handle) return next();
+        let p;
+        try { p = await domain.profiles.byHandle(db, handle); } catch { return next(); }
+        if (!p) return next();
+        const q = req.originalUrl.includes('?') ? req.originalUrl.slice(req.originalUrl.indexOf('?')) : '';
+        return res.redirect(301, `/@${encodeURIComponent(p.handle)}${m[2] || ''}${m[3] || ''}${q}`);
+    });
     // The agent layer (openvibe-shared/agent-layer): /.well-known/agent.json and the Markdown twins of the
     // public pages (server/agent-pages.js). The pages keep their own routes — a signed-in viewer's tip form,
     // account bar and anti-forgery token are theirs — so only the manifest and twin requests reach this

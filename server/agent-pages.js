@@ -41,7 +41,7 @@ function createAgentPages({ domain, config, layout, liveNow = { list: async () =
         const list = await goals.publicGoals(db, await goals.list(db, p.creator_subject), p);
         const publicSounds = p.sounds_enabled ? await sounds.list(db, p.creator_subject) : [];
         return twin({
-            title: `Support ${p.display_name}`, active: 'creator', canonicalPath: `/${p.handle}`,
+            title: `Support ${p.display_name}`, active: 'creator', canonicalPath: `/@${p.handle}`,
             description: p.headline || `Tip ${p.display_name} on OpenVibe.Tips: tips, goals, paid messages${p.tts_enabled ? ', text-to-speech' : ''}${p.media_requests_enabled ? ', media requests' : ''}.`,
             robots: 'index,follow', ogImage: p.avatar_url || undefined,
             body: pages.creatorPage({
@@ -55,7 +55,7 @@ function createAgentPages({ domain, config, layout, liveNow = { list: async () =
         const p = await profiles.byHandle(db, handle);
         if (!p || !p.page_enabled) return null;
         return twin({
-            title: `${p.display_name} — goals`, canonicalPath: `/${p.handle}/goals`, robots: 'index,follow',
+            title: `${p.display_name} — goals`, canonicalPath: `/@${p.handle}/goals`, robots: 'index,follow',
             body: pages.goalsPage({ profile: p, goals: await goals.publicGoals(db, await goals.list(db, p.creator_subject), p) }),
         });
     }
@@ -67,7 +67,7 @@ function createAgentPages({ domain, config, layout, liveNow = { list: async () =
         const leaderboard = top.map((row) => (p.page.supporters_amounts ? row : { ...row, total: null }));
         const recent = recentRows ? recentRows.map((v) => (p.page.supporters_amounts ? v : { ...v, amount: null })) : null;
         return twin({
-            title: `${p.display_name} — supporters`, canonicalPath: `/${p.handle}/supporters`, robots: 'index,follow',
+            title: `${p.display_name} — supporters`, canonicalPath: `/@${p.handle}/supporters`, robots: 'index,follow',
             body: pages.supportersPage({ profile: p, leaderboard, recent }),
         });
     }
@@ -76,7 +76,7 @@ function createAgentPages({ domain, config, layout, liveNow = { list: async () =
         const p = String(path || '/').replace(/\/+$/, '') || '/';
         if (p === '/') return home();
         if (p === '/updates') return updates();
-        const m = /^\/([^/]+)(\/goals|\/supporters)?$/.exec(p);
+        const m = /^\/@([^/]+)(\/goals|\/supporters)?$/.exec(p);
         if (!m) return null;
         const handle = profiles.normalizeHandle(m[1]);
         if (!handle) return null;

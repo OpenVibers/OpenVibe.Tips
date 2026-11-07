@@ -45,7 +45,7 @@ const KEY = 'k'.repeat(32);
 
     await check('switching a creator page on pings its URL and the sitemap', async () => {
         alex = await t.creator('alex', { settings: { headline: 'Late-night synth streams' } });
-        assert.ok(pings.includes('http://tips.test/alex'), JSON.stringify(pings));
+        assert.ok(pings.includes('http://tips.test/@alex'), JSON.stringify(pings));
         assert.ok(pings.includes('http://tips.test/sitemap.xml'), JSON.stringify(pings));
     });
 
@@ -53,7 +53,7 @@ const KEY = 'k'.repeat(32);
         pings.length = 0;
         const r = await t.call('PATCH', '/api/v1/profiles/me', { user: alex, body: { headline: 'Now with text-to-speech' } });
         assert.strictEqual(r.status, 200, r.text);
-        assert.ok(pings.includes('http://tips.test/alex'), JSON.stringify(pings));
+        assert.ok(pings.includes('http://tips.test/@alex'), JSON.stringify(pings));
         assert.ok(pings.includes('http://tips.test/sitemap.xml'), JSON.stringify(pings));
     });
 

@@ -94,7 +94,7 @@ const HOME_PANE_IDS = ['send', 'for-creators', 'services', 'how', 'costs'];
 function home({ creators, live = [] }) {
     const m = NEW_PAGE_MINIMUMS;
     const liveCards = live.length ? `<ul class="tp-cards">${live.map((c) => `<li class="tp-card"><p class="tp-card-top"><span class="tp-live">Live</span> <a href="${esc(c.url)}"><strong>${esc(c.name)}</strong></a></p>${c.title ? `<p>${esc(c.title)}</p>` : ''}<p class="meta">${[c.category, watching(c.viewers)].filter(Boolean).map(esc).join(' · ')}</p></li>`).join('')}</ul>` : '';
-    const creatorCards = creators.length ? `<ul class="tp-cards">${creators.map((c) => `<li class="tp-card"><p class="tp-card-top">${c.avatar_url ? `<img src="${esc(mediaSrc(c.avatar_url, 96))}" alt="" width="40" height="40" loading="lazy">` : ''}<a href="/${esc(c.handle)}"><strong>${esc(c.display_name)}</strong></a></p>${c.headline ? `<p>${esc(c.headline)}</p>` : ''}${c.goal ? `<p class="meta">Goal: ${esc(c.goal.title)}</p><div class="bar" role="progressbar" aria-label="${esc(c.goal.title)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${c.goal.percent}"><span style="width:${c.goal.percent}%"></span></div>` : ''}</li>`).join('')}</ul>` : '';
+    const creatorCards = creators.length ? `<ul class="tp-cards">${creators.map((c) => `<li class="tp-card"><p class="tp-card-top">${c.avatar_url ? `<img src="${esc(mediaSrc(c.avatar_url, 96))}" alt="" width="40" height="40" loading="lazy">` : ''}<a href="/@${esc(c.handle)}"><strong>${esc(c.display_name)}</strong></a></p>${c.headline ? `<p>${esc(c.headline)}</p>` : ''}${c.goal ? `<p class="meta">Goal: ${esc(c.goal.title)}</p><div class="bar" role="progressbar" aria-label="${esc(c.goal.title)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${c.goal.percent}"><span style="width:${c.goal.percent}%"></span></div>` : ''}</li>`).join('')}</ul>` : '';
     return showcase.hero({
         eyebrow: 'OpenVibe.Tips',
         title: 'Support the creators', accent: 'you watch',
@@ -191,7 +191,7 @@ function tipForm({ profile, goals, viewer, csrf, idem, values = {}, providers, e
     const kind = values.kind || 'tip';
     const active = goals.filter((g) => g.status === 'active');
     if (!profile.accepting) return `<section class="card"><p>${esc(profile.display_name)} is not accepting tips right now.</p></section>`;
-    return `<form class="card tip-form" method="post" action="/${esc(profile.handle)}/tip">
+    return `<form class="card tip-form" method="post" action="/@${esc(profile.handle)}/tip">
   <h2>Send ${esc(profile.display_name)} something</h2>
   ${errorBox(error)}
   ${hidden({ csrf: csrf || '', idem })}
@@ -303,7 +303,7 @@ function creatorPage({ profile, goals, viewer, csrf, idem, values, providers, er
 <section class="creator-head">
   ${profile.avatar_url ? `<img class="avatar" src="${esc(mediaSrc(profile.avatar_url, 320))}" alt="" width="96" height="96">` : ''}
   <div><h1>${esc(profile.display_name)}</h1>${profile.headline ? `<p class="headline">${esc(profile.headline)}</p>` : ''}
-  <p class="links"><a href="https://openvibe.live/@${esc(profile.handle)}">Watch on OpenVibe.Live</a> · <a href="/${esc(profile.handle)}/goals">Goals</a>${profile.page.supporters_page ? ` · <a href="/${esc(profile.handle)}/supporters">Supporters</a>` : ''}</p></div>
+  <p class="links"><a href="https://openvibe.live/@${esc(profile.handle)}">Watch on OpenVibe.Live</a> · <a href="/@${esc(profile.handle)}/goals">Goals</a>${profile.page.supporters_page ? ` · <a href="/@${esc(profile.handle)}/supporters">Supporters</a>` : ''}</p></div>
 </section>
 ${tipForm({ profile, goals, viewer, csrf, idem, values, providers, error, sounds })}
 ${active.length ? `<section><h2>Goals</h2>${active.map(goalCard).join('')}</section>` : ''}
@@ -313,7 +313,7 @@ ${supportLinksSection(profile)}`;
 
 function goalsPage({ profile, goals }) {
     return `<h1>${esc(profile.display_name)} — goals</h1>
-<p><a href="/${esc(profile.handle)}">Back to ${esc(profile.display_name)}</a></p>
+<p><a href="/@${esc(profile.handle)}">Back to ${esc(profile.display_name)}</a></p>
 ${goals.length ? goals.map(goalCard).join('') : '<p>No goals yet.</p>'}
 <p class="fine">Goal totals count settled payments only.${profile.page.goal_supporters ? ' Supporters are listed as they chose to be shown.' : ''}</p>`;
 }
@@ -327,14 +327,14 @@ function supportersPage({ profile, leaderboard, recent }) {
     const wall = recent && recent.length
         ? `<section><h2>Recent messages</h2><ul class="wall">${recent.map((v) => `<li><b>${esc(v.supporter_name)}</b>${v.amount != null ? ` <small>${n(v.amount)} Vibes</small>` : ''}<p>${esc(v.message)}</p><small>${when(v.at)}</small></li>`).join('')}</ul></section>` : '';
     return `<h1>${esc(profile.display_name)} — supporters</h1>
-<p><a href="/${esc(profile.handle)}">Back to ${esc(profile.display_name)}</a></p>
+<p><a href="/@${esc(profile.handle)}">Back to ${esc(profile.display_name)}</a></p>
 <section><h2>Top supporters</h2>${board}</section>
 ${page.supporters_messages ? wall || '<p>No public messages yet.</p>' : ''}
 <p class="fine">Anonymous tips and tips with a hidden amount are not on this list.</p>`;
 }
 
 function receiptRow(i, as) {
-    const who = as === 'creator' ? esc(i.supporter_name || 'Someone') : `<a href="/${esc(i.creator_handle || '')}">${esc(i.creator_name || 'creator')}</a>`;
+    const who = as === 'creator' ? esc(i.supporter_name || 'Someone') : `<a href="/@${esc(i.creator_handle || '')}">${esc(i.creator_name || 'creator')}</a>`;
     return `<tr${i.test ? ' class="test"' : ''}><td><a href="/receipts/${esc(i.id)}">${when(i.created_at)}</a></td><td>${who}</td><td>${esc(KIND_LABEL[i.kind])}${i.test ? ' <small>(simulation)</small>' : ''}</td><td class="num">${n(i.amount)}</td><td>${esc(PAY_LABEL[i.payment.state])}</td><td>${esc(DELIVERY_LABEL[i.delivery.state])}</td></tr>`;
 }
 
@@ -373,7 +373,7 @@ function receiptPage({ i, profile, as, cancelled }) {
     return `<h1>Receipt</h1>
 ${cancelled && i.payment.state === 'pending' ? '<p class="notice">Checkout was cancelled. Nothing was charged; you can start again from the creator\'s page.</p>' : ''}
 <dl class="receipt">
-  <dt>Creator</dt><dd>${profile ? `<a href="/${esc(profile.handle)}">${esc(profile.display_name)}</a>` : 'unknown'}</dd>
+  <dt>Creator</dt><dd>${profile ? `<a href="/@${esc(profile.handle)}">${esc(profile.display_name)}</a>` : 'unknown'}</dd>
   <dt>From</dt><dd>${esc(i.supporter_name || 'Someone')}</dd>
   <dt>What</dt><dd>${esc(KIND_LABEL[i.kind])}${i.test ? ' (simulation, not charged, not counted)' : ''}</dd>
   ${privacyLine(i.privacy) ? `<dt>Privacy</dt><dd>${privacyLine(i.privacy)}</dd>` : ''}
@@ -434,7 +434,7 @@ ${flash ? `<p class="notice">${esc(flash)}</p>` : ''}${errorBox(error)}
     <p class="fine">Simulations (${n(totals.simulations)}) are never counted. OpenVibe.Billing keeps your Vibes: your balance and cash-outs are in <a href="https://openvibe.live/#vibes">your Vibes</a>.</p>
   </div>
   <div class="card"><h2>Your page</h2>
-    <p><a href="/${esc(p.handle)}">openvibe.tips/${esc(p.handle)}</a> — ${p.page_enabled ? 'on and indexable' : 'off (only you can see it)'}</p>
+    <p><a href="/@${esc(p.handle)}">openvibe.tips/@${esc(p.handle)}</a> — ${p.page_enabled ? 'on and indexable' : 'off (only you can see it)'}</p>
     <form method="post" action="/dashboard/profile">${hidden({ csrf, idem: `${idem}-p` })}
       <label><input type="checkbox" name="page_enabled" value="1"${f('page_enabled')}> Public page on (search engines may index it)</label>
       <label><input type="checkbox" name="accepting" value="1"${f('accepting')}> Accepting tips</label>

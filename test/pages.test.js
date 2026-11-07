@@ -30,22 +30,22 @@ const { boot, check, done } = require('./helpers/app');
         assert.match(r.text, /<meta name="ov-release"/);
         assert.match(r.text, /id="ov-footer"|class="ovf/);
         assert.match(r.text, /<script type="application\/ld\+json">[^<]*"@type":"WebSite"[^<]*"name":"OpenVibe.Tips"/, 'the home says what the site is (JSON-LD)');
-        assert.match(r.text, /href="\/alex"/);
-        assert.ok(!r.text.includes('href="/bob"'), 'switched-off pages are not listed');
+        assert.match(r.text, /href="\/@alex"/);
+        assert.ok(!r.text.includes('href="/@bob"'), 'switched-off pages are not listed');
         // The home opens with the showcase kit (openvibe-shared/showcase): one h1 (the hero), the kit's sheet, the
         // pricing from the real defaults, and the creators list still below it.
         assert.ok(r.text.includes('class="sc-hero') && r.text.includes('class="sc-tiers"'), 'hero and pricing');
         assert.match(r.text, /<link rel="stylesheet" href="\/shared\/showcase\.css\?v=[^"]+">/);
         assert.strictEqual((r.text.match(/<h1[\s>]/g) || []).length, 1, 'one h1');
         assert.ok(r.text.indexOf('class="sc-hero') < r.text.indexOf('id="creators"'), 'the creators follow the showcase');
-        assert.ok(!(await get('/alex')).text.includes('showcase.css'), 'only the home links the kit');
+        assert.ok(!(await get('/@alex')).text.includes('showcase.css'), 'only the home links the kit');
     });
 
     await check('a Media avatar is asked for the width the page draws; an already sized URL is left alone', async () => {
         const obj = 'https://openvibe.media/o/med_01M644DY8BFX4H7MTRKPGG052R';
         await t.db.exec(`UPDATE creator_tip_profiles SET avatar_url = '${obj}' WHERE handle = 'alex'`);
         assert.ok((await get('/')).text.includes(`<img src="${obj}?w=96" alt="" width="40" height="40" loading="lazy">`), 'the 40 px creator card asks for 96');
-        assert.ok((await get('/alex')).text.includes(`<img class="avatar" src="${obj}?w=320" alt="" width="96" height="96">`), 'the 96 px creator page head asks for 320');
+        assert.ok((await get('/@alex')).text.includes(`<img class="avatar" src="${obj}?w=320" alt="" width="96" height="96">`), 'the 96 px creator page head asks for 320');
         await t.db.exec(`UPDATE creator_tip_profiles SET avatar_url = '${obj}?w=64' WHERE handle = 'alex'`);
         const sized = await get('/');
         assert.ok(sized.text.includes(`src="${obj}?w=64"`), 'the URL is used as stored');
@@ -62,7 +62,7 @@ const { boot, check, done } = require('./helpers/app');
     });
 
     await check('every page carries the boost marker and script, and the navbar signs in back to the current page', async () => {
-        for (const [p, u] of [['/', null], ['/alex', viewer], ['/dashboard', alex], ['/receipts', viewer], ['/updates', alex]]) {
+        for (const [p, u] of [['/', null], ['/@alex', viewer], ['/dashboard', alex], ['/receipts', viewer], ['/updates', alex]]) {
             const r = await get(p, u);
             assert.strictEqual(r.status, 200, p);
             assert.match(r.text, /<meta name="ov-boost" content="tips@[^"]+">/, p);
@@ -72,16 +72,19 @@ const { boot, check, done } = require('./helpers/app');
     });
 
     await check('creator page: indexable when on, goals and a no-JS tip form', async () => {
-        const r = await get('/alex');
+        const r = await get('/@alex');
         assert.strictEqual(r.status, 200);
         assert.match(r.text, /<meta name="robots" content="index,follow">/);
-        assert.match(r.text, /<link rel="canonical" href="http:\/\/tips\.test\/alex">/);
+        assert.match(r.text, /<link rel="canonical" href="http:\/\/tips\.test\/@alex">/);
         assert.match(r.text, /New synth/);
-        assert.match(r.text, /<form class="card tip-form" method="post" action="\/alex\/tip">/);
+        assert.match(r.text, /<form class="card tip-form" method="post" action="\/@alex\/tip">/);
         assert.match(r.text, /Sign in to send/);
         assert.match(r.text, /Late-night synth streams/);
         assert.match(r.text, /"@type":"ProfilePage"/);
-        assert.match((await get('/@alex')).headers.get('location') || '', /\/alex$/);
+        const legacy = await get('/alex?from=old');
+        assert.deepStrictEqual([legacy.status, legacy.headers.get('location')], [301, '/@alex?from=old']);
+        assert.deepStrictEqual([(await get('/ALEX')).status, (await get('/ALEX')).headers.get('location')], [301, '/@alex']);
+        assert.strictEqual((await get('/nobody-here')).status, 404);
     });
 
     await check('the head comes from openvibe-shared/shell and keeps every tag and script of the site', async () => {
@@ -105,19 +108,19 @@ const { boot, check, done } = require('./helpers/app');
         assert.match(home.text, /<main id="main" class="page page-wide">/, "the home is the wide page");
         assert.match(home.text, /OpenVibeFooter\.init\(window\.__OV_PAGE\.footer\)/);
 
-        const creator = await get('/alex');
+        const creator = await get('/@alex');
         const creatorHead = creator.text.slice(0, creator.text.indexOf('</head>'));
-        assert.match(creatorHead, /<link rel="canonical" href="http:\/\/tips\.test\/alex">/);
+        assert.match(creatorHead, /<link rel="canonical" href="http:\/\/tips\.test\/@alex">/);
         assert.match(creatorHead, /<script type="application\/ld\+json">\{[^<]*"@type":"ProfilePage"/);
     });
 
     await check('a switched-off page: 404 + noindex for everyone else; a noindex preview for its creator', async () => {
-        const anon = await get('/bob');
+        const anon = await get('/@bob');
         assert.strictEqual(anon.status, 404);
         assert.match(anon.text, /noindex/);
-        const other = await get('/bob', viewer);
+        const other = await get('/@bob', viewer);
         assert.strictEqual(other.status, 404);
-        const own = await get('/bob', bob);
+        const own = await get('/@bob', bob);
         assert.strictEqual(own.status, 200);
         assert.match(own.text, /<meta name="robots" content="noindex,nofollow">/);
         assert.match(own.headers.get('x-robots-tag'), /noindex/);
@@ -137,9 +140,10 @@ const { boot, check, done } = require('./helpers/app');
         assert.strictEqual(sm.status, 200);
         assert.match(sm.headers.get('content-type'), /^application\/xml/);
         assert.match(sm.text, /<loc>http:\/\/tips\.test\/<\/loc>/, 'the sitemap lists the home URL');
-        assert.match(sm.text, /<loc>http:\/\/tips\.test\/alex<\/loc>/);
+        assert.match(sm.text, /<loc>http:\/\/tips\.test\/@alex<\/loc>/);
+        assert.ok(!sm.text.includes('<loc>http://tips.test/alex</loc>'), 'the old root form is not a sitemap page');
         assert.match(sm.text, /<lastmod>\d{4}-\d{2}-\d{2}<\/lastmod>/, 'every url carries a real lastmod');
-        assert.ok(!sm.text.includes('/bob<'));
+        assert.ok(!sm.text.includes('/@bob<'));
         const llms = await get('/llms.txt');
         assert.strictEqual(llms.status, 200);
         assert.match(llms.headers.get('content-type'), /^text\/plain/);
@@ -161,22 +165,22 @@ const { boot, check, done } = require('./helpers/app');
         assert.match(full.headers.get('content-type'), /^text\/plain/);
         assert.match(full.text, /^# /, 'llms-full.txt starts with the same markdown heading');
         assert.match(full.text, /URL: http:\/\/tips\.test\/\n/, 'llms-full.txt contains the home URL');
-        assert.match(full.text, /URL: http:\/\/tips\.test\/alex\n/, 'llms-full.txt contains the switched-on creator page');
-        assert.ok(!full.text.includes('/bob'), 'llms-full.txt never lists a switched-off page');
+        assert.match(full.text, /URL: http:\/\/tips\.test\/@alex\n/, 'llms-full.txt contains the switched-on creator page');
+        assert.ok(!full.text.includes('/@bob'), 'llms-full.txt never lists a switched-off page');
         assert.ok(!/(?:URL: http:\/\/tips\.test\/)(?:dashboard|receipts|overlay|moderate|auth|api)/.test(full.text), 'llms-full.txt lists no signed-in page');
         assert.ok(Buffer.byteLength(full.text) < 512 * 1024, 'llms-full.txt stays under 512 KiB');
     });
 
     await check('tipping without JavaScript: sign-in first, then a form post settles and lands on the receipt', async () => {
-        const anon = await post('/alex/tip', null, { amount: '10' });
+        const anon = await post('/@alex/tip', null, { amount: '10' });
         assert.strictEqual(anon.status, 303);
-        assert.match(anon.headers.get('location'), /^\/auth\/login\?next=%2Falex/);
-        const page = await get('/alex', viewer);
+        assert.match(anon.headers.get('location'), /^\/auth\/login\?next=%2F%40alex/);
+        const page = await get('/@alex', viewer);
         const csrf = field(page.text, 'csrf');
         const idem = field(page.text, 'idem');
         assert.ok(csrf && idem);
         const form = { csrf, idem, kind: 'tip', amount: '25', message: 'no js needed', pay_with: 'credit', supporter_name: 'Viewer' };
-        const r = await post('/alex/tip', viewer, form);
+        const r = await post('/@alex/tip', viewer, form);
         assert.strictEqual(r.status, 303, r.text.slice(0, 300));
         const loc = r.headers.get('location');
         assert.match(loc, /^\/receipts\/tint_/);
@@ -184,7 +188,7 @@ const { boot, check, done } = require('./helpers/app');
         assert.strictEqual((await domain.interactions.get(t.db, id)).payment_state, 'settled');
         // Double submit (same form nonce): the same interaction, no second transfer.
         const before = billing.transfers().length;
-        const again = await post('/alex/tip', viewer, form);
+        const again = await post('/@alex/tip', viewer, form);
         assert.strictEqual(again.headers.get('location'), loc);
         assert.strictEqual(billing.transfers().length, before);
         const receipt = await get(loc, viewer);
@@ -198,10 +202,10 @@ const { boot, check, done } = require('./helpers/app');
     });
 
     await check('a forged cross-site form (no valid token) is refused', async () => {
-        const r = await post('/alex/tip', viewer, { csrf: 'forged', idem: 'form-abcdefghijkl', amount: '10' });
+        const r = await post('/@alex/tip', viewer, { csrf: 'forged', idem: 'form-abcdefghijkl', amount: '10' });
         assert.strictEqual(r.status, 403);
-        const other = await get('/alex', bob);
-        const r2 = await post('/alex/tip', viewer, { csrf: field(other.text, 'csrf'), idem: 'form-abcdefghijkm', amount: '10' });
+        const other = await get('/@alex', bob);
+        const r2 = await post('/@alex/tip', viewer, { csrf: field(other.text, 'csrf'), idem: 'form-abcdefghijkm', amount: '10' });
         assert.strictEqual(r2.status, 403, 'a token minted for someone else does not work');
         const d = await post('/dashboard/profile', alex, { csrf: 'nope', page_enabled: '0' });
         assert.strictEqual(d.status, 403);
@@ -209,11 +213,11 @@ const { boot, check, done } = require('./helpers/app');
     });
 
     await check('the form reports Billing\'s refusal in words; checkout redirects to the provider', async () => {
-        const page = await get('/alex', viewer);
-        const low = await post('/alex/tip', viewer, { csrf: field(page.text, 'csrf'), idem: 'form-low-balance-1', amount: '99999', pay_with: 'credit' });
+        const page = await get('/@alex', viewer);
+        const low = await post('/@alex/tip', viewer, { csrf: field(page.text, 'csrf'), idem: 'form-low-balance-1', amount: '99999', pay_with: 'credit' });
         assert.strictEqual(low.status, 409);
         assert.match(low.text, /balance is too low/);
-        const co = await post('/alex/tip', viewer, { csrf: field(page.text, 'csrf'), idem: 'form-checkout-0001', amount: '200', pay_with: 'checkout', provider: 'stripe' });
+        const co = await post('/@alex/tip', viewer, { csrf: field(page.text, 'csrf'), idem: 'form-checkout-0001', amount: '200', pay_with: 'checkout', provider: 'stripe' });
         assert.strictEqual(co.status, 303);
         assert.match(co.headers.get('location'), /^https:\/\/checkout\.stripe\.test\//);
     });
@@ -241,12 +245,13 @@ const { boot, check, done } = require('./helpers/app');
         const off = await post('/dashboard/profile', alex, { csrf, idem: 'x', accepting: '1', revision: String((await domain.profiles.byHandle(t.db, 'alex')).revision) });
         assert.strictEqual(off.status, 303);
         assert.strictEqual((await domain.profiles.byHandle(t.db, 'alex')).page_enabled, false, 'an unchecked box switches the page off');
-        assert.strictEqual((await get('/alex')).status, 404);
+        assert.strictEqual((await get('/@alex')).status, 404);
+        assert.strictEqual((await get('/alex')).status, 301, 'the switched-off page\'s old root link still moves to its one address');
     });
 
     await check('copy rules: no pricing claims ("free", "$0", "no ads") on any page', async () => {
         await t.call('PATCH', '/api/v1/profiles/me', { user: alex, body: { page_enabled: true } });
-        for (const [p, u] of [['/', null], ['/alex', viewer], ['/alex/goals', null], ['/dashboard', alex], ['/receipts', viewer]]) {
+        for (const [p, u] of [['/', null], ['/@alex', viewer], ['/@alex/goals', null], ['/dashboard', alex], ['/receipts', viewer]]) {
             const r = await get(p, u);
             const visible = r.text.replace(/<style[\s\S]*?<\/style>/g, '').replace(/<script[\s\S]*?<\/script>/g, '');
             assert.ok(!COPY.test(visible), `${p} has forbidden copy: ${(visible.match(COPY) || [])[0]}`);

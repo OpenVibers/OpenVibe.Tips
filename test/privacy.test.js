@@ -135,7 +135,7 @@ function payloadValidator(type) {
         const list = (await t.call('GET', '/api/v1/goals?creator=alex', { token: null })).json.goals;
         assert.strictEqual(list[0].current_amount, null);
         assert.ok((await t.call('GET', `/api/v1/goals/${goal.id}`, { user: alex })).json.goal.current_amount > 0, 'the creator sees everything');
-        const html = await fetch(`${t.base}/alex/goals`).then((x) => x.text());
+        const html = await fetch(`${t.base}/@alex/goals`).then((x) => x.text());
         assert.ok(!/of 100,000 Vibes/.test(html), 'the page shows the percentage only');
         assert.match(html, /Other/);
         await t.call('PATCH', '/api/v1/profiles/me', { user: alex, body: { page: { goal_amounts: true } } });
@@ -149,7 +149,7 @@ function payloadValidator(type) {
 
     await check('the supporters page: off by default; the creator picks names, amounts and messages', async () => {
         assert.strictEqual((await t.call('GET', '/api/v1/profiles/alex/supporters', { token: null })).status, 404);
-        assert.strictEqual((await fetch(`${t.base}/alex/supporters`)).status, 404);
+        assert.strictEqual((await fetch(`${t.base}/@alex/supporters`)).status, 404);
         await tip(other, { amount: 1000, supporter_name: 'Other', message: 'big fan' });
         await t.call('PATCH', '/api/v1/profiles/me', { user: alex, body: { page: { supporters_page: true } } });
         let r = (await t.call('GET', '/api/v1/profiles/alex/supporters', { token: null })).json;
@@ -166,19 +166,19 @@ function payloadValidator(type) {
         assert.ok(!msgs.includes('just for you'), 'a private message never shows');
         assert.strictEqual(r.recent.find((v) => v.message === 'from nobody').supporter_name, 'Anonymous');
         assert.strictEqual(r.recent.find((v) => v.message === 'keep it quiet').amount, null);
-        const html = await fetch(`${t.base}/alex/supporters`).then((x) => x.text());
+        const html = await fetch(`${t.base}/@alex/supporters`).then((x) => x.text());
         assert.match(html, /big fan/);
         assert.match(html, /<meta name="robots" content="index,follow">/);
         assert.ok(!html.includes('just for you') && !html.includes('Viewer Real Name'));
-        assert.match(await fetch(`${t.base}/alex`).then((x) => x.text()), /href="\/alex\/supporters"/);
+        assert.match(await fetch(`${t.base}/@alex`).then((x) => x.text()), /href="\/@alex\/supporters"/);
     });
 
     await check('the no-JS tip form carries the privacy choices', async () => {
         const cookie = `ov_token=${t.network.signUser(other)}`;
-        const page = await fetch(`${t.base}/alex`, { headers: { Cookie: cookie } }).then((x) => x.text());
+        const page = await fetch(`${t.base}/@alex`, { headers: { Cookie: cookie } }).then((x) => x.text());
         assert.match(page, /name="anonymous"/);
         const csrf = page.match(/name="csrf" value="([^"]*)"/)[1];
-        const res = await fetch(`${t.base}/alex/tip`, {
+        const res = await fetch(`${t.base}/@alex/tip`, {
             method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: cookie },
             body: new URLSearchParams({ csrf, idem: 'form-privacy-00001', kind: 'tip', amount: '15', message: 'shh', pay_with: 'credit', supporter_name: 'Other', anonymous: '1', private_message: '1' }).toString(),
         });

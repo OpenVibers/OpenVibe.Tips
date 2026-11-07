@@ -29,13 +29,13 @@ const { boot, check, done } = require('./helpers/app');
         assert.match(r.text, /openvibe\.tips\/sam/);
         assert.match(r.text, /Turn on my tip page/);
         assert.match(r.text, /noindex/);
-        assert.strictEqual((await req('GET', '/sam')).status, 404, 'the page is off until the creator turns it on');
+        assert.strictEqual((await req('GET', '/@sam')).status, 404, 'the page is off until the creator turns it on');
     });
 
     await check('a form without this site\'s anti-forgery field changes nothing', async () => {
         const r = await req('POST', '/start', sam, { csrf: 'forged' });
         assert.strictEqual(r.status, 403);
-        assert.strictEqual((await req('GET', '/sam')).status, 404);
+        assert.strictEqual((await req('GET', '/@sam')).status, 404);
     });
 
     await check('the button turns the page on, accepting tips, and opens the dashboard', async () => {
@@ -45,7 +45,7 @@ const { boot, check, done } = require('./helpers/app');
         assert.strictEqual(r.location, `/dashboard?done=${encodeURIComponent('Your tip page is on')}`);
         const dash = await req('GET', r.location, sam);
         assert.match(dash.text, /Your tip page is on/);
-        const pub = await req('GET', '/sam');
+        const pub = await req('GET', '/@sam');
         assert.strictEqual(pub.status, 200);
         const api = await t.call('GET', '/api/v1/profiles/sam', { token: null });
         assert.deepStrictEqual([api.json.profile.page_enabled, api.json.profile.accepting], [true, true]);

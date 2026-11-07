@@ -67,7 +67,7 @@ const validModerated = payloadValidator('tips.interaction.moderated');
         const tts = await pay('tts', { amount: 150, tts: { text: 'say badword now please' } });
         await domain.effects.drain();
         assert.strictEqual(jobsOf(tts.json.interaction.id).find((j) => j.effect === 'tts').tts.text, 'say now please');
-        const page = await get('/alex/supporters');
+        const page = await get('/@alex/supporters');
         assert.ok(!/badword/i.test(page.text.replace(/<style[\s\S]*?<\/style>/g, '')), 'the supporters page shows no blocked word');
     });
 
@@ -120,7 +120,7 @@ const validModerated = payloadValidator('tips.interaction.moderated');
         const ok = await post(path, mod, { csrf: field(page.text, 'csrf'), idem: 'x' });
         assert.strictEqual(ok.status, 303);
         assert.match(ok.headers.get('location'), /^\/moderate\/alex\?done=/);
-        assert.strictEqual((await post(path, stranger, { csrf: field((await get('/alex', stranger)).text, 'csrf'), idem: 'x' })).status, 404, 'used once');
+        assert.strictEqual((await post(path, stranger, { csrf: field((await get('/@alex', stranger)).text, 'csrf'), idem: 'x' })).status, 404, 'used once');
         assert.strictEqual((await get('/api/v1/moderators?creator=alex', null)).status, 401);
         const list = await t.call('GET', '/api/v1/moderators', { user: alex });
         assert.deepStrictEqual(list.json.moderators.map((m) => m.moderator.id), [mod.subject]);
