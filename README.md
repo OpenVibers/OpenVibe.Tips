@@ -2,6 +2,9 @@
 
 > Creator support: tips, goals, paid messages, TTS, media requests and paid sounds, overlays.
 
+**Live site:** https://openvibe.tips · **API docs:** https://openvibe.services · **For AI:** https://openvibe.tips/llms.txt
+**Run it:** `npm ci && npm run dev` (Node 22 or newer) · **Tests:** `npm test`
+
 **Status:** alpha — **launched 2026-10-17** at [openvibe.tips](https://openvibe.tips) (openvibe-contracts 0.200.0), right
 after the Billing cutover made OpenVibe.Billing the money ledger. Tips posts its chat lines and alerts through
 OpenVibe.Chat (`TIPS_CHAT_ADAPTER=chat`), records a streamer's own PowerChat tips from Billing, and OpenVibe.Live
