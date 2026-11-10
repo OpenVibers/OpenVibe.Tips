@@ -91,6 +91,20 @@ const HOME_PANE_IDS = ['send', 'for-creators', 'services', 'how', 'costs'];
  * supporter can send, what a creator gets (overlays for any streaming app, other ways to be paid), what it costs, how it
  * works and the questions people ask. live: clients/live-now.js; creators: switched-on pages with their active goal.
  */
+/**
+ * The home's picture: a tip arriving on a stream. A frame that stands for the stream (a LIVE tag, a soft light), the
+ * alert a creator's overlay shows when a tip lands, and the goal bar under it moving up by that tip. Plain markup and
+ * CSS (public/css/tips.css, .tp-scene): the alert rises in and the bar fills once, and both are simply in place under
+ * reduced motion. The names and numbers are an example, and the caption says so.
+ */
+function tipScene() {
+    return `<figure class="tp-scene" aria-label="An example: a tip arriving on a creator's stream">
+<div class="tp-scene-stream"><span class="tp-scene-live">Live</span>
+<div class="tp-scene-alert"><span class="tp-scene-av" aria-hidden="true">M</span><span class="tp-scene-say"><b>maru tipped 500 Vibes</b><small>“play that song again!”</small></span></div></div>
+<div class="tp-scene-goal"><p><b>Goal: a new microphone</b><span>3,100 of 5,000 Vibes</span></p><div class="tp-scene-bar" role="img" aria-label="62 percent of the goal"><i></i></div></div>
+<figcaption>An example: the alert and the goal a creator's stream shows.</figcaption></figure>`;
+}
+
 function home({ creators, live = [] }) {
     const m = NEW_PAGE_MINIMUMS;
     const liveCards = live.length ? `<ul class="tp-cards">${live.map((c) => `<li class="tp-card"><p class="tp-card-top"><span class="tp-live">Live</span> <a href="${esc(c.url)}"><strong>${esc(c.name)}</strong></a></p>${c.title ? `<p>${esc(c.title)}</p>` : ''}<p class="meta">${[c.category, watching(c.viewers)].filter(Boolean).map(esc).join(' · ')}</p></li>`).join('')}</ul>` : '';
@@ -98,24 +112,9 @@ function home({ creators, live = [] }) {
     return showcase.hero({
         eyebrow: 'OpenVibe.Tips',
         title: 'Support the creators', accent: 'you watch',
-        // The hero's picture is this site's own (2026-11-01): it drew the generic aura, the same on six homes.
-        // What a viewer can send, around the creator.
-        orbit: {
-            label: 'What you can send',
-            center: { title: 'The creator', sub: 'gets it' },
-            inner: [
-                { icon: 'ov:tips', label: 'A tip', href: '#send' },
-                { icon: 'ov:chat', label: 'Paid message', href: '#send' },
-                { icon: 'ov:audio', label: 'Read out', href: '#send' },
-                { icon: 'ov:video', label: 'Video request', href: '#send' },
-                { icon: 'ov:bell', label: 'A sound', href: '#send' },
-            ],
-            outer: [
-                { icon: 'ov:live', label: 'Live', href: 'https://openvibe.live/' },
-                { icon: 'ov:vip', label: 'VIP', href: 'https://openvibe.vip/' },
-                { icon: 'ov:billing', label: 'Billing', href: 'https://billing.openvibe.network/' },
-            ],
-        },
+        // The hero's picture is what Tips does, drawn (2026-11-10; the owner: no more "generic circled" homes): a
+        // stream with a tip arriving on it, and the creator's goal filling. It is an example and says so.
+        aside: { html: tipScene() },
         lede: 'Tip a creator with Vibes, send a highlighted paid message, have your message read out, request a video or play one of their sounds on stream. Creators set goals and show every tip with overlays that work on any streaming app.',
         actions: [
             ...(creators.length ? [{ label: 'Find a creator', href: '#creators', primary: true }] : live.length ? [{ label: 'See who is live', href: '#live', primary: true }] : []),
