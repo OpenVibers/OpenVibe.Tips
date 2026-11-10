@@ -45,7 +45,7 @@ const { createLiveNow } = require('../server/clients/live-now');
         const body = text.slice(text.indexOf('<main'));
         assert.strictEqual(r.status, 200);
         assert.strictEqual((text.match(/<h1[\s>]/g) || []).length, 1, 'one h1');
-        assert.ok(body.includes('id="live"') && body.includes('<a href="https://openvibe.live/@busy_1"><strong>Busy</strong></a>') && body.includes('gaming · 40 watching'));
+        assert.ok(body.includes('id="live"') && body.includes('<a href="https://openvibe.live/@busy_1"><strong>@busy_1</strong></a>') && body.includes('gaming · 40 watching'));
         assert.ok(body.includes('For creators') && body.includes('Overlays for any stream'));
         assert.ok(body.includes('<li>Ko-fi</li>') && body.includes('<li>StreamElements</li>'), 'the services a creator can link');
         const ld = [...text.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)].map((m) => JSON.parse(m[1]));
