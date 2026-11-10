@@ -29,7 +29,7 @@ h1 { font-size: 1.8rem; margin: .2em 0 .5em; }
 .btn { display: inline-block; background: var(--accent-strong, var(--tips-accent)); color: var(--on-accent-strong, var(--tips-on-accent)); border: 0; border-radius: 8px; padding: 9px 16px; font: inherit; font-weight: 600; cursor: pointer; text-decoration: none; }
 .btn.ghost { background: transparent; color: var(--tips-accent); border: 1px solid var(--tips-accent); }
 form label { display: block; margin: 10px 0; }
-form input[type=text], form input[type=number], form input[type=url], form textarea, form select, input.copy {
+form input:not([type]), form input[type=text], form input[type=number], form input[type=url], form textarea, form select, input.copy {
   display: block; width: 100%; margin-top: 4px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--tips-border);
   background: var(--tips-bg); color: var(--tips-text); font: inherit; }
 form input[type=checkbox], form input[type=radio] { margin-right: 6px; }
