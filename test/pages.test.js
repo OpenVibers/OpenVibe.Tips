@@ -31,6 +31,7 @@ const { boot, check, done } = require('./helpers/app');
         assert.match(r.text, /id="ov-footer"|class="ovf/);
         assert.match(r.text, /<script type="application\/ld\+json">[^<]*"@type":"WebSite"[^<]*"name":"OpenVibe.Tips"/, 'the home says what the site is (JSON-LD)');
         assert.match(r.text, /href="\/@alex"/);
+        assert.ok(r.text.includes('class="muted">@alex</span>'), 'the creator card names the handle by its @address');
         assert.ok(!r.text.includes('href="/@bob"'), 'switched-off pages are not listed');
         // The home opens with the showcase kit (openvibe-shared/showcase): one h1 (the hero), the kit's sheet, the
         // pricing from the real defaults, and the creators list still below it.
