@@ -22,10 +22,10 @@ const { boot, check, done } = require('./helpers/app');
     const field = (html, name) => { const m = html.match(new RegExp(`name="${name}" value="([^"]*)"`)); return m ? m[1] : null; };
     const COPY = /\bfree\b|\$0\b|no ads/i;
 
-    await check('home: server-rendered with the shared chrome, a noscript nav and the release meta', async () => {
+    await check('home: server-rendered with the shared chrome, a server-rendered nav and the release meta', async () => {
         const r = await get('/');
         assert.strictEqual(r.status, 200);
-        assert.match(r.text, /<noscript><nav/);
+        assert.match(r.text, /<div id="navbar-mount"><nav class="openvibe-navbar"[^>]*data-ov-server-nav="true"/, 'the server-rendered navbar is in the first HTML');
         assert.match(r.text, /\/shared\/navbar\.js\?v=[0-9a-f]{12}/);
         assert.match(r.text, /<meta name="ov-release"/);
         assert.match(r.text, /id="ov-footer"|class="ovf/);
