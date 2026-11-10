@@ -19,7 +19,7 @@ a { color: var(--tips-accent); }
 .site-head nav { display: flex; gap: 14px; flex: 1; }
 .site-head nav a { color: var(--tips-muted); text-decoration: none; }
 .site-head nav a[aria-current] { color: var(--tips-text); }
-.page { max-width: 880px; margin: 0 auto; padding: 24px 16px 48px; }
+.page { max-width: 880px; margin: 0 auto; padding: 24px 16px 0; }
 h1 { font-size: 1.8rem; margin: .2em 0 .5em; }
 .hero p { font-size: 1.1rem; color: var(--tips-muted); }
 .card { background: var(--tips-card); border: 1px solid var(--tips-border); border-radius: 12px; padding: 18px 20px; margin: 18px 0; }
