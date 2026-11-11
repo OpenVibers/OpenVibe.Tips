@@ -51,6 +51,10 @@ const WAV = Buffer.concat([Buffer.from('RIFF'), Buffer.from([0x24, 0, 0, 0]), Bu
         const page = await get('/dashboard', alex);
         assert.match(page.text, /id="sounds"/);
         assert.match(page.text, /enctype="multipart\/form-data"/);
+        assert.match(page.text, /ov-upload\.css/);
+        assert.match(page.text, /ov-upload\.js/);
+        assert.match(page.text, /data-sound-picker data-max-bytes="524288"/);
+        assert.match(page.text, /data-sound-error hidden/);
         const ok = await upload(alex, { name: 'Airhorn', file: MP3 });
         assert.strictEqual(ok.status, 303, ok.text.slice(0, 300));
         assert.match(ok.location, /done=Sound%20added/);

@@ -91,6 +91,9 @@ function createLayout({ config, release }) {
                 `<link rel="stylesheet" href="${ovServe.url('kit.css')}">`,
                 // openvibe-shared stylesheets a page asks for by name (the home's showcase.css).
                 ...(o.styles || []).map((name) => `<link rel="stylesheet" href="${ovServe.url(name)}">`),
+                o.uploadKit ? `<link rel="stylesheet" href="${ovServe.url('ov-upload.css')}">` : '',
+                o.uploadKit ? `<script src="${ovServe.url('ov-upload.js')}" defer></script>` : '',
+                o.uploadKit ? `<script src="${asset('js/sound-upload.js')}" defer></script>` : '',
                 `<meta name="ov-boost" content="tips@${esc(RELEASE)}">`,
                 `<script src="${ovServe.url('boost.js')}" data-main="#main" defer></script>`,
                 `<script src="${asset('js/tips.js')}" defer></script>`,

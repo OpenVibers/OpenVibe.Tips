@@ -401,7 +401,8 @@ function soundsCard({ profile: p, sounds, csrf, idem }) {
     <form method="post" action="/dashboard/sounds/${esc(x.id)}/delete">${hidden({ csrf, idem: `${idem}-sd-${x.id}` })}<button class="btn btn-small" type="submit">Delete</button></form></li>`).join('')}</ul>` : '<p class="muted">No sounds yet.</p>'}
   ${full ? '<p class="muted">You have 12 sounds: delete one to add another.</p>' : `<form method="post" action="/dashboard/sounds" enctype="multipart/form-data" class="sound-upload">${hidden({ csrf, idem: `${idem}-su` })}
     <label>Name <input type="text" name="name" maxlength="40" placeholder="Airhorn"></label>
-    <label>File <input type="file" name="file" accept="audio/mpeg,audio/ogg,audio/wav,.mp3,.ogg,.wav" required></label>
+    <label>File <input type="file" name="file" accept="audio/mpeg,audio/ogg,audio/wav,.mp3,.ogg,.wav" required data-sound-file></label>
+    <div data-sound-picker data-max-bytes="524288"></div><p role="alert" data-sound-error hidden></p>
     <button class="btn" type="submit">Add sound</button>
   </form>`}
 </section>`;
