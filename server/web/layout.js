@@ -88,6 +88,7 @@ function createLayout({ config, release }) {
                 appIcon.headTags({ site: 'tips' }),
                 release ? release.metaTag() : '',
                 `<link rel="stylesheet" href="${asset('css/tips.css')}">`,
+                `<link rel="stylesheet" href="${ovServe.url('kit.css')}">`,
                 // openvibe-shared stylesheets a page asks for by name (the home's showcase.css).
                 ...(o.styles || []).map((name) => `<link rel="stylesheet" href="${ovServe.url(name)}">`),
                 `<meta name="ov-boost" content="tips@${esc(RELEASE)}">`,

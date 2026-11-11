@@ -6,6 +6,7 @@
  * the creator's own headline is the only pitch on their page.
  */
 const showcase = require('openvibe-shared/showcase');
+const kit = require('openvibe-shared/kit');
 const glyphs = require('openvibe-shared/glyphs');
 const { esc } = require('./layout');
 const { VOICES } = require('../domain/profiles');
@@ -290,7 +291,7 @@ function postsAdmin({ posts = [], tiers = [], csrf, idem }) {
         + '<form class="inline" method="post" action="/dashboard/posts/' + esc(p.id) + '/' + (p.status === 'hidden' ? 'unhide' : 'hide') + '">'
         + hidden({ csrf, idem: idem + '-post-' + p.id })
         + '<button class="btn ghost" type="submit">' + (p.status === 'hidden' ? 'Show again' : 'Hide') + '</button></form>'
-        + '</article>').join('') : '<p class="muted small">No posts yet.</p>';
+        + '</article>').join('') : kit.empty({ icon: 'file', title: 'No posts yet', text: 'Write a members-only post above and it appears here.' });
     return '<section class="card"><h2>Members-only posts</h2>'
         + '<p class="muted small">A post is written for the members of one or more of your tiers. Only a member of that tier reads the text; everyone else sees the title and a way to join.</p>'
         + composer + mine + '</section>';
@@ -313,7 +314,7 @@ ${supportLinksSection(profile)}`;
 function goalsPage({ profile, goals }) {
     return `<h1>${esc(profile.display_name)} — goals</h1>
 <p><a href="/@${esc(profile.handle)}">Back to ${esc(profile.display_name)}</a></p>
-${goals.length ? goals.map(goalCard).join('') : '<p>No goals yet.</p>'}
+${goals.length ? goals.map(goalCard).join('') : kit.empty({ icon: 'flag', title: 'No goals yet', text: 'When this creator sets a goal it appears here, with what it pays for and how close it is.' })}
 <p class="fine">Goal totals count settled payments only.${profile.page.goal_supporters ? ' Supporters are listed as they chose to be shown.' : ''}</p>`;
 }
 
@@ -346,7 +347,7 @@ function privacyLine(p) {
 function receiptsPage({ rows, next, flash }) {
     return `<h1>Your receipts</h1>
 ${flash ? `<p class="notice">${esc(flash)}</p>` : ''}
-${rows.length ? `<table class="list"><thead><tr><th>When</th><th>Creator</th><th>What</th><th class="num">Vibes</th><th>Payment</th><th>Delivery</th></tr></thead><tbody>${rows.map((r) => receiptRow(r, 'supporter')).join('')}</tbody></table>` : '<p>No tips yet.</p>'}
+${rows.length ? `<table class="list"><thead><tr><th>When</th><th>Creator</th><th>What</th><th class="num">Vibes</th><th>Payment</th><th>Delivery</th></tr></thead><tbody>${rows.map((r) => receiptRow(r, 'supporter')).join('')}</tbody></table>` : kit.empty({ icon: 'coin', title: 'No tips yet', text: 'Tips you send on OpenVibe.Tips appear here with their receipt.', action: { href: '/', label: 'Find a creator', icon: 'search' } })}
 ${next ? `<p><a href="/receipts?cursor=${esc(next)}">Older</a></p>` : ''}
 <section class="card"><h2>Your data</h2>
   <p><a class="btn ghost" href="/receipts/export">Download your tips (JSON)</a></p>
@@ -536,7 +537,7 @@ function moderationCard({ p, csrf, idem, mod }) {
     <button class="btn ghost" type="submit">Save the filter</button>
   </form>
   <h3>Moderators</h3>
-  ${moderators.length ? `<ul class="plain">${moderators.map((m) => `<li>${esc(m.name || m.moderator.id)} <small>since ${when(m.added_at)}</small> <form class="inline" method="post" action="/dashboard/moderators/${esc(m.moderator.id)}/remove">${hidden({ csrf, idem: `${idem}-m-${m.moderator.id}` })}<button class="btn ghost" type="submit">Remove</button></form></li>`).join('')}</ul>` : '<p>No moderators yet.</p>'}
+  ${moderators.length ? `<ul class="plain">${moderators.map((m) => `<li>${esc(m.name || m.moderator.id)} <small>since ${when(m.added_at)}</small> <form class="inline" method="post" action="/dashboard/moderators/${esc(m.moderator.id)}/remove">${hidden({ csrf, idem: `${idem}-m-${m.moderator.id}` })}<button class="btn ghost" type="submit">Remove</button></form></li>`).join('')}</ul>` : kit.empty({ icon: 'shield', title: 'No moderators yet', text: 'Invite someone below and they can help with paid messages.' })}
   ${invites.length ? `<p class="fine">Open invitations: ${invites.map((x) => `created ${when(x.created_at)}, expires ${when(x.expires_at)} <form class="inline" method="post" action="/dashboard/moderator-invites/${esc(x.id)}/revoke">${hidden({ csrf, idem: `${idem}-ri-${x.id}` })}<button class="btn ghost" type="submit">Revoke</button></form>`).join(' · ')}</p>` : ''}
   <form method="post" action="/dashboard/moderator-invites">${hidden({ csrf, idem: `${idem}-i` })}<button class="btn ghost" type="submit">Create a moderator invitation link</button></form>
   ${mod.log && mod.log.length ? `<details><summary>Latest moderation</summary><table class="list"><thead><tr><th>When</th><th>What</th><th>By</th><th>Receipt</th></tr></thead><tbody>${mod.log.map((l) => `<tr><td>${when(l.created_at)}</td><td>${esc(l.action)}</td><td>${esc(ROLE_LABEL[l.by_role] || l.by_role)}</td><td><a href="/receipts/${esc(l.interaction_id)}"><code>${esc(l.interaction_id.slice(-8))}</code></a></td></tr>`).join('')}</tbody></table></details>` : ''}
