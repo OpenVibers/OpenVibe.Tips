@@ -20,7 +20,8 @@ const { boot, check, done } = require('./helpers/app');
         return { status: r.status, headers: r.headers, text: await r.text() };
     };
     const field = (html, name) => { const m = html.match(new RegExp(`name="${name}" value="([^"]*)"`)); return m ? m[1] : null; };
-    const COPY = /\bfree\b|\$0\b|no ads/i;
+    // The shared footer's "Free tools" group is a place, not a price claim.
+    const COPY = /\bfree\b(?!\s+tools)|\$0\b|no ads/i;
 
     await check('home: server-rendered with the shared chrome, a server-rendered nav and the release meta', async () => {
         const r = await get('/');
