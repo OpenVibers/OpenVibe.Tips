@@ -256,7 +256,7 @@ function createWebRoutes({ domain, config, layout, userAuth, liveNow = { list: a
             domain.vip.tiers(s),
         ]);
         html(res, pageFor(req, {
-            title: 'Dashboard', active: 'dashboard', robots: 'noindex,nofollow', canonicalPath: '/dashboard',
+            title: 'Dashboard', active: 'dashboard', robots: 'noindex,nofollow', canonicalPath: '/dashboard', uploadKit: true,
             body: pages.dashboard({
                 profile: p, goals: goalRows, tokens: tokens.map(overlays.presentToken),
                 configs: configs.map(overlays.presentConfig), totals, recent: recentRows,
