@@ -12,19 +12,19 @@ const { boot, check, done } = require('./helpers/app');
 (async () => {
     const t = await boot();
     try {
-        await check('the home is one pick block: a chip per part, the first picked, every part in the page', async () => {
+        await check('the home is one pick block: a tab per part, the first picked, every part in the page', async () => {
             const r = await t.call('GET', '/', { token: null });
             assert.strictEqual(r.status, 200, r.text);
             const page = r.text;
             const block = page.slice(page.indexOf('<div class="pick" id="pick-parts">'), page.indexOf('<div class="pick" id="pick-parts">') + 60000);
             assert.ok(block.startsWith('<div class="pick" id="pick-parts">'), 'the pick block is on the home');
-            assert.match(block, /<nav class="pick-row" aria-label="What Tips does">/);
-            const chips = [...block.matchAll(/<a class="pick-chip" href="#(?:pp-parts-)?([a-z-]+)">()([^<]+)<\/a>/g)];
-            assert.ok(chips.length >= 5, `a chip per part (${chips.length})`);
-            assert.ok(!/type="radio"/.test(block), 'no chip is a radio: nothing is picked, every pane shows');
-            // Every part stays in the page, with the id its chip picks.
+            assert.match(block, /<div class=\"ov-parts ov-parts--front\" data-parts=\"\d+\">/, 'its parts are tabs on a phone');
+            const chips = [...block.matchAll(/<label for="ovp-[a-z0-9]+-(?:pp-parts-)?([a-z-]+)">()([^<]+)(?: <span class="ov-parts-n">[^<]*<\/span>)?<\/label>/g)];
+            assert.ok(chips.length >= 5, `a tab per part (${chips.length})`);
+            assert.ok(/<input type=\"radio\" class=\"ov-parts-r\"[^>]* checked>/.test(block), 'the first part is open on a phone (Shared pick(): tabs, 11-12)');
+            // Every part stays in the page, with the id its tab opens.
             const panes = [...block.matchAll(/<div class="pick-pane" id="([a-z-]+)">/g)].map((m) => m[1]);
-            assert.deepStrictEqual(panes, chips.map((m) => m[1]), 'every part is in the page, one per chip');
+            assert.deepStrictEqual(panes, chips.map((m) => m[1]), 'every part is in the page, one per tab');
             // The parts themselves are all there: nothing was removed.
             for (const title of ['What you can send', 'For creators', 'Other ways to support', 'How it works', 'What it costs to send']) {
                 assert.ok(page.includes(title), `${title} is on the page`);
