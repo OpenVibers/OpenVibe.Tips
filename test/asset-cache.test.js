@@ -18,10 +18,10 @@ const { assetVersion } = require('../server/web/layout');
         assert.strictEqual(good.headers.get('cache-control'), cache.IMMUTABLE);
         const wrong = await get(`/${rel}?v=deadbeefdeadbeef`);
         assert.strictEqual(wrong.status, 200);
-        assert.strictEqual(wrong.headers.get('cache-control'), 'public, max-age=300, stale-while-revalidate=86400');
+        assert.strictEqual(wrong.headers.get('cache-control'), 'public, max-age=300, stale-while-revalidate=300');
         const bare = await get(`/${rel}`);
         assert.strictEqual(bare.status, 200);
-        assert.strictEqual(bare.headers.get('cache-control'), 'public, max-age=300, stale-while-revalidate=86400');
+        assert.strictEqual(bare.headers.get('cache-control'), 'public, max-age=300, stale-while-revalidate=300');
     });
 
     await check('robots.txt: the shared html policy at the same window', async () => {
