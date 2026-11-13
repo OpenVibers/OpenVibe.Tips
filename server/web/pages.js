@@ -81,7 +81,7 @@ const watching = (v) => (v === 1 ? '1 watching' : `${n(v)} watching`);
 function homeSection({ id, title, lede, more, body, headId }) {
     if (!body) return '';
     const h = headId || id;
-    return `<section class="tp-sec" aria-labelledby="${esc(h)}"><div class="tp-head"><h2 id="${esc(h)}">${esc(title)}</h2>${more ? `<a class="tp-more" href="${esc(more.href)}">${esc(more.label)}<span aria-hidden="true"> →</span></a>` : ''}</div>${lede ? `<p class="tp-lede">${esc(lede)}</p>` : ''}${body}</section>`;
+    return `<section class="tp-sec" aria-labelledby="${esc(h)}"><div class="tp-head"><h2 id="${esc(h)}">${esc(title)}</h2>${more ? `<a class="tp-more" href="${esc(more.href)}">${esc(more.label)}<span aria-hidden="true">${glyphs.svg('arrow-right', { size: 14 })}</span></a>` : ''}</div>${lede ? `<p class="tp-lede">${esc(lede)}</p>` : ''}${body}</section>`;
 }
 
 /** The home's pick block, one part at a time on a phone: the ids of its panes, in order. */
