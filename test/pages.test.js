@@ -85,6 +85,7 @@ const { boot, check, done } = require('./helpers/app');
         assert.match(r.text, /"@type":"ProfilePage"/);
         const legacy = await get('/alex?from=old');
         assert.deepStrictEqual([legacy.status, legacy.headers.get('location')], [301, '/@alex?from=old']);
+        assert.strictEqual(legacy.headers.get('cache-control'), 'public, max-age=86400', 'a name\'s 301 lives a day in a browser, not for good (11-14)');
         assert.deepStrictEqual([(await get('/ALEX')).status, (await get('/ALEX')).headers.get('location')], [301, '/@alex']);
         assert.strictEqual((await get('/nobody-here')).status, 404);
     });

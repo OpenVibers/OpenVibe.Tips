@@ -538,7 +538,7 @@ function createWebRoutes({ domain, config, layout, userAuth, liveNow = { list: a
         const p = await profiles.byHandle(db, req.params.handle);
         const owner = !!(p && req.viewer && req.viewer.subject === p.creator_subject);
         if (!p || (!p.page_enabled && !owner)) return notFound(req, res);
-        if (p.handle !== String(req.params.handle)) return res.redirect(301, `/@${encodeURIComponent(p.handle)}`);   // Name → the one canonical /@name
+        if (p.handle !== String(req.params.handle)) return res.set('Cache-Control', 'public, max-age=86400').redirect(301, `/@${encodeURIComponent(p.handle)}`);   // Name → the one canonical /@name
         // The page shows what the public sees, for the creator too (a preview); the dashboard has the rest.
         const list = await goals.publicGoals(db, await goals.list(db, p.creator_subject), p);
         // The members-only posts: the title and the tier are public, the text only for a member of a
@@ -593,6 +593,7 @@ function createWebRoutes({ domain, config, layout, userAuth, liveNow = { list: a
         const p = await profiles.byHandle(db, handle);
         if (!p) return next();
         const q = req.originalUrl.includes('?') ? req.originalUrl.slice(req.originalUrl.indexOf('?')) : '';
+        res.set('Cache-Control', 'public, max-age=86400');   // a name's 301 lives a day in a browser, not for good (11-14)
         return res.redirect(301, `/@${encodeURIComponent(p.handle)}${suffix}${q}`);
     };
     r.get('/:handle', withViewer, legacy(''));
