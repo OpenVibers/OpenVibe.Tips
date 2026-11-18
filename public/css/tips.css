@@ -19,7 +19,7 @@ a { color: var(--tips-accent); }
 .site-head nav { display: flex; gap: 14px; flex: 1; }
 .site-head nav a { color: var(--tips-muted); text-decoration: none; }
 .site-head nav a[aria-current] { color: var(--tips-text); }
-.page { max-width: 880px; margin: 0 auto; padding: 24px 16px 0; }
+.page { max-width: 880px; margin: 0 auto; padding: 12px 16px 0; }
 h1 { font-size: 1.8rem; margin: .2em 0 .5em; }
 .hero p { font-size: 1.1rem; color: var(--tips-muted); }
 .card { background: var(--tips-card); border: 1px solid var(--tips-border); border-radius: 12px; padding: 18px 20px; margin: 18px 0; }
@@ -189,3 +189,5 @@ ul.mod-list, ul.plain { list-style: none; padding: 0; }
 @keyframes tpSceneFill { from { transform: scaleX(.84); } to { transform: none; } }
 @media (prefers-reduced-motion: reduce) { .tp-scene-alert, .tp-scene-bar i { animation: none; } }
 html[data-ov-motion=reduced] .tp-scene-alert, html[data-ov-motion=reduced] .tp-scene-bar i { animation: none; }
+/* Design rule 201: the intro is one line on a computer, at most two on a phone. */
+@media (max-width: 640px) { .tp-lede { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; } }
