@@ -110,7 +110,7 @@ ul.mod-list, ul.plain { list-style: none; padding: 0; }
 .tp-card-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .tp-card-top img { border-radius: 50%; object-fit: cover; }
 /* The theme's red, darkened enough for small white text (68 %: at least 4.69:1 for every theme's --danger, the light Catppuccin pink included; white on #ef4444 was 3.8:1, axe color-contrast). */
-.tp-live { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: .72rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; background: #b91c1c; background: color-mix(in srgb, var(--danger, #dc2626) 68%, #000); color: #fff; }
+.tp-live { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: .75rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; background: #b91c1c; background: color-mix(in srgb, var(--danger, #dc2626) 68%, #000); color: #fff; }
 .tp-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
 .tp-chips li { padding: 6px 12px; border-radius: 999px; border: 1px solid var(--tips-border); background: var(--tips-card); font-size: .92rem; }
 .tp-faq { display: grid; gap: 8px; margin-top: 14px; }
@@ -172,7 +172,7 @@ ul.mod-list, ul.plain { list-style: none; padding: 0; }
 .tp-scene { width: min(100%, 380px); margin: 0 auto; display: grid; gap: 12px; }
 .tp-scene-stream { position: relative; aspect-ratio: 16 / 10; border-radius: 18px; overflow: hidden; border: 1px solid var(--border, #1f2d47);
     background: radial-gradient(90% 80% at 72% 28%, color-mix(in srgb, var(--accent, #3b82f6) 42%, transparent), transparent 62%), linear-gradient(160deg, var(--bg-tertiary, #172238), var(--bg-card, #131c2e)); }
-.tp-scene-live { position: absolute; left: 10px; top: 10px; padding: 2px 8px; border-radius: 6px; background: color-mix(in srgb, var(--live-red, #e11d48) 82%, #000); color: #fff; font-size: .7rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.tp-scene-live { position: absolute; left: 10px; top: 10px; padding: 2px 8px; border-radius: 6px; background: color-mix(in srgb, var(--live-red, #e11d48) 82%, #000); color: #fff; font-size: .75rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
 .tp-scene-alert { position: absolute; left: 10px; right: 10px; bottom: 10px; display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 14px; background: color-mix(in srgb, var(--bg-primary, #0a0f1c) 86%, transparent); border: 1px solid color-mix(in srgb, var(--accent, #3b82f6) 55%, transparent); box-shadow: 0 10px 28px rgba(0, 0, 0, .35);
     animation: tpSceneIn var(--ov-dur-4, .52s) var(--ov-ease-spring, cubic-bezier(.34, 1.56, .64, 1)) .5s both; }
 .tp-scene-av { flex: none; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; background: hsl(200 60% 42%); color: #fff; font-weight: 800; }
